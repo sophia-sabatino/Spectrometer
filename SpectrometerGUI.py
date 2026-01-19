@@ -33,7 +33,6 @@ class KymeraPanel(QWidget):
         super().__init__()
         self.kymera = kymera_controller
         self._build_ui()
-        self.refresh_status()
     
     def _build_ui(self):
         main = QVBoxLayout()
@@ -109,8 +108,8 @@ class KymeraPanel(QWidget):
             self.status_grating.setText(f"Grating: {g}")
             self.status_wl.setText(f"Central Wavelength: {wl:.2f} nm")
             self.status_range.setText(f"Range: {wl0:.1f} - {wl1:.1f} nm")
-        except Exception:
-            pass
+        except Exception as e:
+            print("KymeraPanel.refresh_status error:", e)
 
 class MainWindow(QMainWindow):
     def __init__(self):
