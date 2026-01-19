@@ -44,12 +44,6 @@ class AndorCameraController:
 
 
     # Cooling control
-    def enable_cooling(self, temperature):
-        with self._lock:
-            self.cam.set_cooler(True)
-            self.cam.set_temperature(temperature)
-            self.cooler_enabled = True
-            self.temperature_setpoint = temperature
 
     def disable_cooling(self):
         with self._lock:
@@ -75,7 +69,7 @@ class AndorCameraController:
             self.cam.set_temperature(setpoint)
             self.temperature_setpoint = setpoint
             self.keep_cooling = True
-            
+
     # Readout / ROI
     def set_roi(self, hbin=1, vbin=1,
                 hstart=0, hend=None,
@@ -235,11 +229,12 @@ class KymeraController:
     def get_calibration_nm(self):
         if self._wl_cache is None:
             wl_m = self.spec.get_calibration()  # meters
-            self._wl_cache = wl_m * 1e9        # convert to nm
+            wl_arr = np.atleast_1d(wl_m)
+            self._wl_cache = wl_arr * 1e9        # convert to nm
         return self._wl_cache
     
     def get_grating(self):
-        return self.spec.get_greating()
+        return self.spec.get_grating()
     
     def get_central_wavelength(self):
         return self.spec.get_wavelength() * 1e9
@@ -255,14 +250,15 @@ class KymeraController:
     
     def list_gratings(self):
         try:
-            info = self.spec.get_greating_info()
+            info = self.spec.get_grating_info()
             return [g['name'] for g in info]
         except AttributeError:
             return [0, 1, 2]
     
     def get_wavelength_span(self):
         wl = self.get_calibration_nm()
-        return wl[0], wl[-1]
+        wl_array = np.atleast_1d(wl)
+        return wl_array[0], wl_array[-1]
     
     def get_status(self):
         return {
@@ -336,10 +332,8 @@ class SpectrometerController:
         return os.path.abspath(filename)
     
     def get_status(self):
-        status = self.cam_ctrl.get_status()
-        status.update({
-            "wavelength_range_nm": self.get_wavelength_axis()[[0, -1]] if self.kymera_ctrl else None
-        })
+        status = self.camera.get_status()
+        status.update(self.kymera.get_status())
         return status
 
     def plot_spectrum(self, spectrum, wl=None):
