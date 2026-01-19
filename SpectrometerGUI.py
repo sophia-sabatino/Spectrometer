@@ -3,7 +3,7 @@ import numpy as np
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, 
     QPushButton, QLabel, QDoubleSpinBox, 
-    QVBoxLayout, QHBoxLayout, QMessageBox
+    QVBoxLayout, QHBoxLayout, QMessageBox, QGroupBox
 )
 from PyQt5.QtCore import QThread, pyqtSignal, QTimer
 import matplotlib.pyplot as plt
@@ -42,6 +42,9 @@ class MainWindow(QMainWindow):
         self.temp_timer.start(1000)
         self.keep_cooling = False
         print("Starting temperature timer")
+        self.kymera = KymeraController()
+        self.kymera_panel = KymeraPanel(self.kymera)
+        self.kymera_panel.status_changed.connect(self.log_status)
 
 
     def init_status_label(self):
@@ -57,18 +60,6 @@ class MainWindow(QMainWindow):
         }
         self.status_label.setText(message)
         self.status_label.setStyleSheet(f"color: {colors.get(level, 'black')};")
-    
-    def get_temperature(self):
-        with self._lock:
-            return self.camera.get_temperature()
-    
-    def maintain_cooling(self):
-        if not self.cooler_enabled:
-            return
-        with self._lock:
-            self.cam.set_cooler(True)
-            if self.temperature_setpoint is not None:
-                self.cam.set_temperature(self.temperature_setpoint)
     
     def update_temperature(self):
         if not self.camera.connected:
@@ -94,7 +85,6 @@ class MainWindow(QMainWindow):
             else:
                 color = "red"
             self.temp_label.setStyleSheet(f"color: {color};")
-            print("Temperature updated")
 
         except Exception as e:
             print("Temperature update error:", e)
@@ -121,6 +111,7 @@ class MainWindow(QMainWindow):
         controls.addWidget(self.exposure_spin)
         controls.addWidget(self.connect_btn)
         controls.addWidget(self.acquire_btn)
+        controls.addWidget(self.kymera_panel)
         controls.addStretch()
 
         main = QHBoxLayout()
@@ -139,9 +130,15 @@ class MainWindow(QMainWindow):
             self.camera.set_exposure(self.exposure_spin.value())
             self.camera.enable_cooling(-100)
             self.camera.keep_cooling = True
-            self.log_status("Camera connected", level="ok")
+
+            self.kymera.setup_from_camera(self.camera.cam)
+
+            self.kymera_panel.populate_gratings()
+            self.kymera_panel.refresh_status()
+
+            self.log_status("Camera & Kymera connected", level="ok")
         except Exception as e:
-            self.log_status(f"Connection failed: {e}", level="error")
+            self.log_status(f"Camera & Kymera connection failed: {e}", level="error")
     
     def acquire_image(self):
         self.log_status("Acquiring image...", level="info")
@@ -150,9 +147,6 @@ class MainWindow(QMainWindow):
         self.worker.error.connect(self.show_error)
         self.worker.finished.connect(lambda:self.log_status("Image acquired", level="ok"))
         self.worker.start()
-
-    def show_error(self, msg):
-        self.log_status(f"Error: {msg}", level="error")
     
     def display_image(self, img):
         self.ax.clear()
@@ -161,7 +155,8 @@ class MainWindow(QMainWindow):
         self.canvas.draw()
     
     def show_error(self, msg):
-        QMessageBox.ciritical(self, "Acquisition Error", msg)
+        QMessageBox.critical(self, "Acquisition Error", msg)
+        self.log_status(msg, level="error")
     
     def closeEvent(self, event):
         reply = QMessageBox.question(self, "Exit", "Exit GUI?\n\nCooling with remain ON until power off.", 
@@ -172,7 +167,93 @@ class MainWindow(QMainWindow):
             event.accept()
         else: 
             event.ignore()
+
+class KymeraPanel(QWidget):
+    status_changed = pyqtSignal(str)
+
+    def __init__(self, kymera_controller):
+        super().__init__()
+        self.kymera = kymera_controller
+        self._build_ui()
+        self.refresh_status()
     
+    def _build_ui(self):
+        main = QVBoxLayout()
+        ctrl_group = QGroupBox("Kymera Control")
+        ctrl_layout = QVBoxLayout()
+
+        g_layout = QHBoxLayout()
+        g_layout.addWidget(QLabel("Grating:"))
+        self.grating_combo = QComboBox()
+        ctrl_layout.addLayout(g_layout)
+        g_layout.addWidget(self,grating_combo)
+    
+        wl_layout = QHBoxLayout()
+        wl_layout.addWidget(QLabel("Central Wavelength"))
+        self.wl_spin = QDoubleSpinBox()
+        #CHECK RANGE
+        self.wl_spin.setRange(200.0, 2000.0)
+        self.wl_spin.setDecimals(2)
+        self.wl_spin.setSingleStep(1.0)
+        ctrl_layout.addLayout(wl_layout)
+        wl_layout.addWidget(self.wl_spin)
+
+        self.apply_btn = QPushButton("Apply")
+        ctrl_layout.addWidget(self.apply_btn)
+
+        ctrl_group.setLayout(ctrl_layout)
+        main.addWidget(ctrl_group)
+
+        status_group = QGroupBox("Status")
+        status_layout = QVBoxLayout()
+
+        self.status_grating = QLabel("Grating: --")
+        self.status_wl = QLabel("Central Wavelength: -- nm")
+        self.status_range = QLabel("Range: -- - -- nm")
+
+        status_layout.add.Widget(self.status_grating)
+        status_layout.addWidget(self.status_wl)
+        status_layout.addWidget(self.status_range)
+
+        status_group.setLayout(status_layout)
+        main.addWidget(status_group)
+
+        main.addStretch()
+
+        self.apply_btn.clicked.connect(self.apply_settings)
+    
+    def populate_gratings(self):
+        self.grating_combo.clear()
+        gratings = self.kymera.list_gratings()
+
+        for i, name in enumerate(gratings):
+            self.grating_bombo.addItem(str(name), i)
+    
+    def apply_settings(self):
+        try:
+            idx = self.grating_combo.currentData()
+            wl = self.wl_spin.value()
+
+            self.kymera.set_grating(idx)
+            self.kymera.set_central_wavelength(wl)
+
+            self.refresh_status()
+            self.status_changed.emit("Kymera settings applied")
+        except Exception as e:
+            self.status_changed.emit(f"Error applying Kymera settings: {e}")
+
+    def refresh_status(self):
+        try:
+            g = self.lymera.get_grating()
+            wl = self.kymera.get_wavelength()
+            wl0, wl1 = self.kymera.get_wavelength_span()
+
+            self.status_grating.setText(f"Grating: {g}")
+            self.status_wl.setText(f"Central Wavelength: {wl:.2f} nm")
+            self.status_range.setText(f"Range: {wl0:.1f} - {wl1:.1f} nm")
+        except Exception:
+            pass
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     win = MainWindow()
