@@ -41,6 +41,7 @@ class AndorCameraController:
         "Open camera connection"
         if not self.connected:
             self.cam = Andor.AndorSDK2Camera()
+            self.cam.set_fan_mode("full")
             self.connected = True
 
     def disconnect(self):
@@ -68,6 +69,8 @@ class AndorCameraController:
         return self.cam.is_cooler_on()
     
     def set_cooler(self, on=True):
+        if on:
+            self.cam.set_fan_mode("full")
         self.cam.set_cooler(on)
     
     def get_temp_status(self):
@@ -383,7 +386,15 @@ class SpectrometerController:
         return spectrum, wl, img"""
     
     def acquire_spectrum(self, laser_wl):
-        image = self.acquire_image()
+        if image is None:
+            image = self.acquire_image()
+        spectrum = image.mean(axis=0)
+        wl = self.kymera.get_calibration_nm()
+        raman = self.wavelength_to_raman_shift(wl, laser_wl)
+        return spectrum, wl, raman
+    
+    def acquire_spectrum_software(self, laser_wl):
+        image = self.camera.acquire_software_triggered()
         spectrum = image.mean(axis=0)
         wl = self.kymera.get_calibration_nm()
         raman = self.wavelength_to_raman_shift(wl, laser_wl)
@@ -448,61 +459,6 @@ class SpectrometerController:
         plt.show()
 
 
-controller = AndorCameraController()
-controller.connect()
-kymera = KymeraController()
-kymera.setup_from_camera(controller.cam)
-spec = SpectrometerController(controller, kymera)
-#controller.enable_cooling(-90)
-print(controller.cooler())
-controller.set_cooler(True)
-controller.set_temp(-90)
-print("Cooler status:", controller.cooler(), controller.get_temp_status())
-print("Temperature:", controller.get_temperature())
-controller.set_fan_mode("low")
-print("Fan:", controller.get_fan_mode())
-
-spectrum, wavelength, raman = spec.acquire_spectrum(633)
-spec.plot_wavelength_spectrum(spectrum, wl=wavelength)
-spec.plot_raman_spectrum(raman, spectrum)
-
-controller.set_readout_mode("single_track")
-print("Readout:", controller.get_readout_mode())
-print("Single mode:", controller.get_single_mode_parameters())
-print("Multi mode:", controller.get_multi_mode_parameters())
-print("Image mode:", controller.get_image_mode_parameters())
-print("Cont mode:", controller.get_cont_mode_parameters())
-print("Acq mode:", controller.get_acquisition_mode())
-print("Trigger:", controller.get_trigger_mode())
-print("Exposure:", controller.get_exposure())
-print("Vertical Shift Speeds:", controller.get_all_vsspeeds())
-print(controller.get_max_vsspeed())
-print("Accum Mode:", controller.get_accum_mode_parameters())
-print("Kinetic Mode:", controller.get_kinetic_mode_parameters())
-print("Grating:", kymera.get_grating())
-print("Slit width:", kymera.get_slit_width_um("input_side"), "µm")
-print("num pixels:", kymera.get_number_pixels())
-print("Calibration:", kymera.get_calibration_nm())
-print("Wavelength span:", kymera.get_wavelength_span())
-print("Offset:", kymera.get_grating_offset())
-print("Pixel width:", kymera.get_acq_pixel_width())
-print("Focus mirror pos:", kymera.get_focus_mirror_position())
-print("Max mirror pos:", kymera.get_focus_mirror_max())
-
-print(controller.cooler())
-print(controller.get_temp_status())
-
-
-
-
-
-# In[ ]:
-
-
-
-
-
-# In[ ]:
 
 
 

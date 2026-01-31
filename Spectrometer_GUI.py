@@ -6,7 +6,7 @@ import pyqtgraph as pg
 pg.setConfigOptions(antialias=True)
 from PyQt6.QtWidgets import (
     QApplication, QWidget,  QPushButton, QVBoxLayout, QGridLayout,QLabel, 
-    QLineEdit, QMessageBox, QComboBox, QGroupBox, QHBoxLayout, QSpinBox
+    QLineEdit, QMessageBox, QComboBox, QGroupBox, QHBoxLayout, QSpinBox, QDoubleSpinBox
 )
 from PyQt6.QtCore import QThread, pyqtSignal, QTimer
 import matplotlib.pyplot as plt 
@@ -19,14 +19,18 @@ class AcquireWorker(QThread):
     finished = pyqtSignal(object, object, object)
     error = pyqtSignal(str)
 
-    def __init__(self, spectrometer, laser_wl):
+    def __init__(self, spec, laser_wl, trigger_mode="int"):
         super().__init__()
-        self.spectrometer = spectrometer
+        self.spec = spec
         self.laser_wl = laser_wl
+        self.trigger_mode = trigger_mode
 
     def run(self):
         try:
-            spectrum, wl, raman = self.spectrometer.acquire_spectrum(self.laser_wl)
+            if self.trigger_mode == "software":
+                spectrum, wl, raman = self.spec.acquire_spectrum_software(self.laser_wl)
+            else:
+                spectrum, wl, raman = self.spec.acquire_spectrum(self.laser_wl)
             self.finished.emit(spectrum, wl, raman)
         except Exception as e:
             self.error.emit(str(e))
@@ -66,7 +70,7 @@ class SpectrometerGUI(QWidget):
 
         self.temp_setpoint = QSpinBox()
         self.temp_setpoint.setRange(-100, 30)
-        self.temp_setpoint.setValue(-90)
+        self.temp_setpoint.setValue(-80)
         self.temp_setpoint.setSuffix("°C")
 
         self.cooler_on = QPushButton("Cooler ON")
@@ -81,9 +85,12 @@ class SpectrometerGUI(QWidget):
 
         cooling_box.setLayout(cooling_layout)
 
-        layout = QVBoxLayout()
-        layout.addWidget(cooling_box)
-        layout.addWidget(self.temp_status_label)
+        main_layout = QHBoxLayout()
+        self.setLayout(main_layout)
+
+        controls_layout = QVBoxLayout()
+        controls_layout.addWidget(cooling_box)
+        controls_layout.addWidget(self.temp_status_label)
 
         fan_box = QGroupBox("Fan")
         fan_layout = QHBoxLayout()
@@ -94,7 +101,7 @@ class SpectrometerGUI(QWidget):
         fan_layout.addWidget(self.fan_combo)
 
         fan_box.setLayout(fan_layout)
-        layout.addWidget(fan_box)
+        controls_layout.addWidget(fan_box)
 
         trigger_box = QGroupBox("Trigger")
         trigger_layout = QHBoxLayout()
@@ -106,7 +113,40 @@ class SpectrometerGUI(QWidget):
         trigger_layout.addWidget(self.trigger_combo)
         trigger_box.setLayout(trigger_layout)
 
-        layout.addWidget(trigger_box)
+        controls_layout.addWidget(trigger_box)
+
+        grating_box = QGroupBox("Grating")
+        grating_layout = QHBoxLayout()
+        self.grating_combo = QComboBox()
+
+        try:
+            gratings = self.kymera.list_gratings()
+        except:
+            gratings = ["Grating 0", "Grating 1", "Grating 2"]
+        
+        for i, g in enumerate(gratings):
+            self.grating_combo.addItem(f"{i}: {g}")
+        
+        grating_layout.addWidget(QLabel("Select:"))
+        grating_layout.addWidget(self.grating_combo)
+        self.grating_combo.setCurrentIndex(0)
+        grating_box.setLayout(grating_layout)
+        controls_layout.addWidget(grating_box)
+
+        slit_box = QGroupBox("Entrance slit")
+        slit_layout = QHBoxLayout()
+
+        self.slit_spin = QDoubleSpinBox()
+        self.slit_spin.setRange(5, 300)
+        self.slit_spin.setSingleStep(5)
+        self.slit_spin.setValue(50)
+        self.slit_spin.setSuffix("µm")
+        self.set_slit_btn = QPushButton("Set")
+        slit_layout.addWidget(QLabel("Width:"))
+        slit_layout.addWidget(self.slit_spin)
+        slit_layout.addWidget(self.set_slit_btn)
+        slit_box.setLayout(slit_layout)
+        controls_layout.addWidget(slit_box)
 
         self.roi_box = QGroupBox("ROI/Binning")
         roi_layout = QGridLayout()
@@ -151,7 +191,7 @@ class SpectrometerGUI(QWidget):
         roi_layout.addWidget(self.vend_spin, 2, 3)
         roi_layout.addWidget(self.apply_roi_btn, 3, 0, 1, 4)
         self.roi_box.setLayout(roi_layout)
-        layout.addWidget(self.roi_box)
+        controls_layout.addWidget(self.roi_box)
 
         self.single_box = QGroupBox("Single track")
         single_layout = QGridLayout()
@@ -169,7 +209,7 @@ class SpectrometerGUI(QWidget):
         single_layout.addWidget(QLabel("Width:"), 1, 0)
         single_layout.addWidget(self.single_width_spin, 1, 1)
         self.single_box.setLayout(single_layout)
-        layout.addWidget(self.single_box)
+        controls_layout.addWidget(self.single_box)
 
         self.multi_box = QGroupBox("Multi track")
         multi_layout = QGridLayout()
@@ -193,7 +233,7 @@ class SpectrometerGUI(QWidget):
         multi_layout.addWidget(QLabel("Offset:"), 2, 0)
         multi_layout.addWidget(self.multi_offset_spin, 2, 1)
         self.multi_box.setLayout(multi_layout)
-        layout.addWidget(self.multi_box)
+        controls_layout.addWidget(self.multi_box)
 
         geom_box = QGroupBox("Readout mode")
         geom_layout = QHBoxLayout()
@@ -204,17 +244,35 @@ class SpectrometerGUI(QWidget):
         geom_layout.addWidget(QLabel("Mode:"))
         geom_layout.addWidget(self.geom_combo)
         geom_box.setLayout(geom_layout)
-        layout.addWidget(geom_box)
+        controls_layout.addWidget(geom_box)
 
-        layout.addWidget(QLabel("Laser wavelength (nm):"))
-        layout.addWidget(self.laser_edit)
-        layout.addWidget(self.connect_btn)
-        layout.addWidget(self.acquire_btn)
-        layout.addWidget(self.status_label)
-        layout.addWidget(self.xaxis_combo)
-        layout.addWidget(self.plot_widget, stretch=1)
+        wl_box = QGroupBox("Central wavelength")
+        wl_layout = QHBoxLayout()
+        self.center_wl_spin = QDoubleSpinBox()
+        self.center_wl_spin.setRange(200, 1200)
+        self.center_wl_spin.setDecimals(2)
+        self.center_wl_spin.setValue(600)
+        self.center_wl_spin.setSuffix("nm")
+        self.set_wl_btn = QPushButton("Set")
+        wl_layout.addWidget(QLabel("Wavelength:"))
+        wl_layout.addWidget(self.center_wl_spin)
+        wl_layout.addWidget(self.set_wl_btn)
+        wl_box.setLayout(wl_layout)
+        controls_layout.addWidget(wl_box)
 
-        self.setLayout(layout)
+        plot_layout = QVBoxLayout()
+        plot_layout.addWidget(QLabel("Laser wavelength (nm):"))
+        plot_layout.addWidget(self.laser_edit)
+        plot_layout.addWidget(self.connect_btn)
+        plot_layout.addWidget(self.acquire_btn)
+        plot_layout.addWidget(self.status_label)
+        plot_layout.addWidget(self.xaxis_combo)
+        plot_layout.addWidget(self.plot_widget, stretch=1)
+
+        main_layout.addLayout(controls_layout, stretch=0)
+        main_layout.addLayout(plot_layout, stretch=1)
+
+        #self.setLayout(main_layout)
         self.connect_btn.clicked.connect(self.connect_devices)
         self.acquire_btn.clicked.connect(self.acquire)
         self.cooler_on.clicked.connect(self.enable_cooling)
@@ -224,6 +282,9 @@ class SpectrometerGUI(QWidget):
         self.geom_combo.currentTextChanged.connect(self.set_geometry_mode)
         self.geom_combo.currentTextChanged.connect(self.update_geometry_ui)
         self.trigger_combo.currentTextChanged.connect(self.set_trigger_mode)
+        self.grating_combo.currentIndexChanged.connect(self.set_grating_from_gui)
+        self.set_wl_btn.clicked.connect(self.set_central_wavelength_from_gui)
+        self.set_slit_btn.clicked.connect(self.set_slit_from_gui)
 
         self.temp_timer = QTimer()
         self.temp_timer.timeout.connect(self.update_temperature)
@@ -251,8 +312,14 @@ class SpectrometerGUI(QWidget):
 
             self.kymera.setup_from_camera(self.cam.cam)
 
-            self.kymera.set_grating(1)
-            self.kymera.set_central_wavelength(532)
+            current_grating = self.kymera.get_grating()
+            self.grating_combo.setCurrentIndex(current_grating-1)
+
+            current_wl = self.kymera.get_central_wavelength()
+            self.center_wl_spin.setValue(current_wl)
+
+            current_slit = self.kymera.get_slit_width_um()
+            self.slit_spin.setValue(current_slit)
 
             self.status_label.setText("Connected")
             self.set_connected(True)
@@ -304,6 +371,35 @@ class SpectrometerGUI(QWidget):
         else:
             QMessageBox.critical(self, "Trigger mode error", "Invalid trigger mode")
         self.status_label.setText(f"Trigger mode: {mode}")
+    
+    #getting an error here 
+    def set_grating_from_gui(self, index):
+        if not self.cam.connected:
+            return
+        
+        try:
+            index = int(index)
+            self.kymera.set_grating(index+1)
+            self.kymera.setup_from_camera(self.cam.cam)
+            self.status_label.setText(f"Grating: {index}")
+        
+        except Exception as e:
+            QMessageBox.critical(self, "Grating error", str(e))
+    
+    def set_slit_from_gui(self):
+        if not self.cam.connected:
+            return
+        
+        try:
+            width = float(self.slit_spin.value())
+            self.kymera.set_slit_width_um(width)
+            self.kymera.setup_from_camera(self.cam.cam)
+            self.status_label.setText(f"Slit = {width:.1f} µm")
+            if self.last_spectrum is not None:
+                self.update_plot()
+        
+        except Exception as e:
+            QMessageBox.critical(self, "Slit error", str(e))
 
     def apply_roi(self):
         try: 
@@ -355,6 +451,21 @@ class SpectrometerGUI(QWidget):
         self.single_box.setVisible(mode == "single_track")
         self.multi_box.setVisible(mode == "multi_track")
         self.roi_box.setVisible(mode == "image")
+    
+    def set_central_wavelength_from_gui(self):
+        if not self.cam.connected: 
+            return
+        
+        try:
+            wl = self.center_wl_spin.value()
+            self.kymera.set_central_wavelength(wl*10e-9)
+            self.kymera.setup_from_camera(self.cam.cam)
+            self.status_label.setText(f"Central wavelength: {wl:.2f} nm")
+            if self.last_spectrum is not None:
+                self.update_plot()
+        
+        except Exception as e:
+            QMessageBox.critical(self, "Wavelength error", str(e))
 
     def acquire(self):
         try:
@@ -364,8 +475,10 @@ class SpectrometerGUI(QWidget):
             QMessageBox.warning(self, "Input error", "Laser wavelength must be a number")
             return 
     
+        trigger_text = self.trigger_combo.currentText()
+        trigger_mode = "software" if trigger_text == "Software" else "int"
         self.status_label.setText("Acquiring...")
-        self.worker = AcquireWorker(self.spec, laser_wl)
+        self.worker = AcquireWorker(self.spec, laser_wl, trigger_mode=trigger_mode)
         self.worker.finished.connect(self.show_result)
         self.worker.error.connect(self.show_error)
         self.worker.start()
