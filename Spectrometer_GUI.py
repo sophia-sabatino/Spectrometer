@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QApplication, QWidget,  QPushButton, QVBoxLayout, QGridLayout,QLabel, 
     QLineEdit, QMessageBox, QComboBox, QGroupBox, QHBoxLayout, QSpinBox, QDoubleSpinBox
 )
-from PyQt6.QtCore import QThread, pyqtSignal, QTimer
+from PyQt6.QtCore import QThread, pyqtSignal, QTimer, Qt
 import matplotlib.pyplot as plt 
 
 from Spectrometer import (
@@ -19,11 +19,12 @@ class AcquireWorker(QThread):
     finished = pyqtSignal(object, object, object)
     error = pyqtSignal(str)
 
-    def __init__(self, spec, laser_wl, trigger_mode="int"):
+    def __init__(self, spec, laser_wl, trigger_mode="int", pixel_width=26.0):
         super().__init__()
         self.spec = spec
         self.laser_wl = laser_wl
         self.trigger_mode = trigger_mode
+        self.pixel_width = pixel_width
 
     def run(self):
         try:
@@ -148,6 +149,30 @@ class SpectrometerGUI(QWidget):
         slit_box.setLayout(slit_layout)
         controls_layout.addWidget(slit_box)
 
+        pixel_width_box = QGroupBox("Pixel width")
+        pixel_width_layout = QHBoxLayout()
+        self.pixel_width_display = QLineEdit()
+        self.pixel_width_display.setReadOnly(True)
+        self.pixel_width_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        pixel_width_layout.addWidget(QLabel("Pixel Width (m):"))
+        pixel_width_layout.addWidget(self.pixel_width_display)
+        pixel_width_box.setLayout(pixel_width_layout)
+        controls_layout.addWidget(pixel_width_box)
+
+        exposure_box = QGroupBox("Exposure time")
+        exposure_layout = QHBoxLayout()
+        self.exposure_spin = QDoubleSpinBox()
+        self.exposure_spin.setRange(0.001, 1000)
+        self.exposure_spin.setValue(0.1)
+        self.exposure_spin.setSuffix("s")
+        self.set_exposure_btn = QPushButton("Set")
+        exposure_layout.addWidget(QLabel("Exposure time (s):"))
+        exposure_layout.addWidget(self.exposure_spin)
+        exposure_layout.addWidget(self.set_exposure_btn)
+        exposure_box.setLayout(exposure_layout)
+        controls_layout.addWidget(exposure_box)
+
         self.roi_box = QGroupBox("ROI/Binning")
         roi_layout = QGridLayout()
 
@@ -246,6 +271,63 @@ class SpectrometerGUI(QWidget):
         geom_box.setLayout(geom_layout)
         controls_layout.addWidget(geom_box)
 
+        acq_box = QGroupBox("Aquisition Mode")
+        acq_layout = QVBoxLayout()
+        self.acq_mode_combo = QComboBox()
+        self.acq_mode_combo.addItems(["single", "accumulate", "kinetic", "continuous"])
+
+        mode_layout = QHBoxLayout()
+        mode_layout.addWidget(QLabel("Mode:"))
+        mode_layout.addWidget(self.acq_mode_combo)
+        acq_box.setLayout(mode_layout)
+
+        self.kinetics_params_box = QGroupBox("Kinetics Parameters")
+        kinetic_layout = QHBoxLayout()
+        self.kinetic_frames_spin = QSpinBox()
+        self.kinetic_frames_spin.setRange(1, 1000)
+        self.kinetic_frames_spin.setValue(10)
+        self.kinetic_cycle_spin = QDoubleSpinBox()
+        self.kinetic_cycle_spin.setRange(0.001, 1000)
+        self.kinetic_cycle_spin.setDecimals(3)
+        self.kinetic_cycle_spin.setValue(0.1)
+        kinetic_layout.addWidget(QLabel("Frames:"))
+        kinetic_layout.addWidget(self.kinetic_frames_spin)
+        kinetic_layout.addWidget(QLabel("Cycle time (s):"))
+        kinetic_layout.addWidget(self.kinetic_cycle_spin)
+        self.kinetics_params_box.setLayout(kinetic_layout)
+        acq_layout.addWidget(self.kinetics_params_box)
+
+        self.accum_params_box = QGroupBox("Accumulate Parameters")
+        accum_layout = QHBoxLayout()
+        self.accum_num_spin = QSpinBox()
+        self.accum_num_spin.setRange(1, 1000)
+        self.accum_num_spin.setValue(5)
+        self.accum_cycle_spin = QDoubleSpinBox()
+        self.accum_cycle_spin.setRange(0.001, 1000)
+        self.accum_cycle_spin.setDecimals(3)
+        self.accum_cycle_spin.setValue(0.1)
+        accum_layout.addWidget(QLabel("Accumulations:"))
+        accum_layout.addWidget(self.accum_num_spin)
+        accum_layout.addWidget(QLabel("Cycle time (s):"))
+        accum_layout.addWidget(self.accum_cycle_spin)
+        self.accum_params_box.setLayout(accum_layout)
+        acq_layout.addWidget(self.accum_params_box)
+
+        self.cont_params_box = QGroupBox("Continuous Parameters")
+        cont_layout = QHBoxLayout()
+        self.cont_cycle_spin = QDoubleSpinBox()
+        self.cont_cycle_spin.setRange(0.001, 1000)
+        self.cont_cycle_spin.setDecimals(3)
+        self.cont_cycle_spin.setValue(0.1)
+        cont_layout.addWidget(QLabel("Cycle time (s):"))
+        cont_layout.addWidget(self.cont_cycle_spin)
+        self.cont_params_box.setLayout(cont_layout)
+        acq_layout.addWidget(self.cont_params_box)
+
+        acq_box.setLayout(acq_layout)
+        controls_layout.addWidget(acq_box)
+
+
         wl_box = QGroupBox("Central wavelength")
         wl_layout = QHBoxLayout()
         self.center_wl_spin = QDoubleSpinBox()
@@ -285,6 +367,8 @@ class SpectrometerGUI(QWidget):
         self.grating_combo.currentIndexChanged.connect(self.set_grating_from_gui)
         self.set_wl_btn.clicked.connect(self.set_central_wavelength_from_gui)
         self.set_slit_btn.clicked.connect(self.set_slit_from_gui)
+        self.acq_mode_combo.currentTextChanged.connect(self.update_acquisition_ui)
+        self.set_exposure_btn.clicked.connect(self.set_exposure_from_gui)
 
         self.temp_timer = QTimer()
         self.temp_timer.timeout.connect(self.update_temperature)
@@ -320,7 +404,15 @@ class SpectrometerGUI(QWidget):
 
             current_slit = self.kymera.get_slit_width_um()
             self.slit_spin.setValue(current_slit)
+            self.pixel_width_display.setText(f"{self.kymera.get_acq_pixel_width():.2f}")
 
+            current_exp = self.cam.get_exposure()
+            self.exposure_spin.setValue(current_exp)
+
+            self.cam.set_readout_mode("fvb")
+            self.geom_combo.setCurrentText("fvb")
+            self.update_geometry_ui("fvb")
+            
             self.status_label.setText("Connected")
             self.set_connected(True)
         except Exception as e:
@@ -400,6 +492,16 @@ class SpectrometerGUI(QWidget):
         
         except Exception as e:
             QMessageBox.critical(self, "Slit error", str(e))
+    
+    def set_exposure_from_gui(self):
+        if not self.cam.connected:
+            return
+        try:
+            exp = self.exposure_spin.value()
+            self.cam.set_exposure(exp)
+            self.status_label.setText(f"Exposure time: {exp:.3f} s")
+        except Exception as e:
+            QMessageBox.critical(self, "Exposure error", str(e))
 
     def apply_roi(self):
         try: 
@@ -452,6 +554,11 @@ class SpectrometerGUI(QWidget):
         self.multi_box.setVisible(mode == "multi_track")
         self.roi_box.setVisible(mode == "image")
     
+    def update_acquisition_ui(self, mode):
+        self.kinetics_params_box.setVisible(mode == "kinetic")
+        self.accum_params_box.setVisible(mode == "accumulate")
+        self.cont_params_box.setVisible(mode == "continuous")
+    
     def set_central_wavelength_from_gui(self):
         if not self.cam.connected: 
             return
@@ -477,8 +584,34 @@ class SpectrometerGUI(QWidget):
     
         trigger_text = self.trigger_combo.currentText()
         trigger_mode = "software" if trigger_text == "Software" else "int"
+
+        if self.acq_mode_combo.currentText() == "single":
+            self.cam.set_acquisition_mode("single")
+        elif self.acq_mode_combo.currentText() == "accumulate":
+            self.cam.set_acquisition_mode("accum")
+        elif self.acq_mode_combo.currentText() == "kinetic":
+            self.cam.set_acquisition_mode("kinetic")
+        elif self.acq_mode_combo.currentText() == "continuous":
+            self.cam.set_acquisition_mode("cont")
+        else:
+            QMessageBox.critical(self, "Acquisition mode error", "Invalid acquisition mode")
+            return
+        
+        if self.acq_mode_combo.currentText() == "kinetic":
+            frames = self.kinetic_frames_spin.value()
+            cycle = self.kinetic_cycle_spin.value()
+            self.cam.setup_kinetic_mode(num_frames=frames, cycle_time=cycle)
+        elif self.acq_mode_combo.currentText() == "accumulate":
+            num_accum = self.accum_num_spin.value()
+            cycle = self.accum_cycle_spin.value()
+            self.cam.setup_accum_mode(num_accum=num_accum, cycle_time=cycle)
+        elif self.acq_mode_combo.currentText() == "continuous":
+            cycle = self.cont_cycle_spin.value()
+            self.cam.setup_cont_mode(cycle_time=cycle)
+
         self.status_label.setText("Acquiring...")
-        self.worker = AcquireWorker(self.spec, laser_wl, trigger_mode=trigger_mode)
+        pixel_width = float(self.pixel_width_display.text())
+        self.worker = AcquireWorker(self.spec, laser_wl, trigger_mode=trigger_mode, pixel_width=pixel_width)
         self.worker.finished.connect(self.show_result)
         self.worker.error.connect(self.show_error)
         self.worker.start()
