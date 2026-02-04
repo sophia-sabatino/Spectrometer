@@ -179,14 +179,14 @@ class AndorCameraController:
             self.cam.set_acquisition_mode(mode)
             self.acquisition_mode = mode
     
-    def start_acqusition(self):
-        self.cam.start_acqusition()
+    def start_acquisition(self):
+        self.cam.start_acquisition()
     
-    def stop_acqusition(self):
+    def stop_acquisition(self):
         self.cam.stop_acquisition()
     
     def get_newest_image(self):
-        return self.cam.get_newest_image()
+        return self.cam.read_newest_image()
     
     def setup_accum_mode(self, num_acc, cycle_time_acc=0):
         self.cam.setup_accum_mode(num_acc, cycle_time_acc)

@@ -34,7 +34,7 @@ class AcquireWorker(QThread):
                 spectrum, wl, raman = self.spec.acquire_spectrum(self.laser_wl)
             self.finished.emit(spectrum, wl, raman)
         except Exception as e:
-            self.error.emit(str(e))
+            self.error.emit(repr(e))
 
 class SpectrometerGUI(QWidget):
     def __init__(self):
@@ -324,6 +324,16 @@ class SpectrometerGUI(QWidget):
         self.cont_params_box.setLayout(cont_layout)
         acq_layout.addWidget(self.cont_params_box)
 
+        self.start_cont_btn = QPushButton("Start Live")
+        self.stop_cont_btn = QPushButton("Stop Live")
+        self.stop_cont_btn.setEnabled(False)
+
+        controls_layout.addWidget(self.start_cont_btn)
+        controls_layout.addWidget(self.stop_cont_btn)
+
+        self.live_timer = QTimer()
+        self.live_timer.timeout.connect(self.update_live_spectrum)
+
         acq_box.setLayout(acq_layout)
         controls_layout.addWidget(acq_box)
 
@@ -369,6 +379,8 @@ class SpectrometerGUI(QWidget):
         self.set_slit_btn.clicked.connect(self.set_slit_from_gui)
         self.acq_mode_combo.currentTextChanged.connect(self.update_acquisition_ui)
         self.set_exposure_btn.clicked.connect(self.set_exposure_from_gui)
+        self.start_cont_btn.clicked.connect(self.start_live)
+        self.stop_cont_btn.clicked.connect(self.stop_live)
 
         self.temp_timer = QTimer()
         self.temp_timer.timeout.connect(self.update_temperature)
@@ -462,7 +474,7 @@ class SpectrometerGUI(QWidget):
             self.cam.set_software_trigger()
         else:
             QMessageBox.critical(self, "Trigger mode error", "Invalid trigger mode")
-        self.status_label.setText(f"Trigger mode: {mode}")
+        self.status_label.setText(f"Trigger mode: {text}")
     
     #getting an error here 
     def set_grating_from_gui(self, index):
@@ -575,8 +587,9 @@ class SpectrometerGUI(QWidget):
             QMessageBox.critical(self, "Wavelength error", str(e))
 
     def acquire(self):
+        self.cam.abort()
         try:
-            self.set_connected(False)
+            self.acquire_btn.setEnabled(False)
             laser_wl = float(self.laser_edit.text())
         except ValueError:
             QMessageBox.warning(self, "Input error", "Laser wavelength must be a number")
@@ -600,11 +613,11 @@ class SpectrometerGUI(QWidget):
         if self.acq_mode_combo.currentText() == "kinetic":
             frames = self.kinetic_frames_spin.value()
             cycle = self.kinetic_cycle_spin.value()
-            self.cam.setup_kinetic_mode(num_frames=frames, cycle_time=cycle)
+            self.cam.setup_kinetic_mode(num_cycle=frames, cycle_time=cycle)
         elif self.acq_mode_combo.currentText() == "accumulate":
             num_accum = self.accum_num_spin.value()
             cycle = self.accum_cycle_spin.value()
-            self.cam.setup_accum_mode(num_accum=num_accum, cycle_time=cycle)
+            self.cam.setup_accum_mode(num_acc=num_accum, cycle_time_acc=cycle)
         elif self.acq_mode_combo.currentText() == "continuous":
             cycle = self.cont_cycle_spin.value()
             self.cam.setup_cont_mode(cycle_time=cycle)
@@ -620,10 +633,10 @@ class SpectrometerGUI(QWidget):
         if self.last_spectrum is None:
             return 
         
-        if self.xaxis_combo.currentText() == "Raman shift)":
+        if self.xaxis_combo.currentText().startswith("Raman"):
             x = self.last_raman
             self.plot_widget.setLabel("bottom", "Raman shift (cm${-1}$)")
-            self.plot_widget.getViewBow().invertX(True)
+            self.plot_widget.getViewBox().invertX(True)
         else:
             x = self.last_wavelength
             self.plot_widget.setLabel("bottom", "Wavelength (nm)")
@@ -642,11 +655,55 @@ class SpectrometerGUI(QWidget):
         self.last_raman = raman
 
         self.update_plot()
-        self.set_connected(True)
+        self.acquire_btn.setEnabled(True)
+    
+    def start_live(self):
+        try:
+            self.cam.abort()
+            self.cam.set_acquisition_mode("cont")
+            cycle = self.cont_cycle_spin.value()
+            self.cam.start_acquisition()
+            self.live_timer.start(int(cycle*1000))
+            self.start_cont_btn.setEnabled(False)
+            self.stop_cont_btn.setEnabled(True)
+            self.status_label.setText("Live acquisition started")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Live error", str(e))
+    
+    def update_live_spectrum(self):
+        try:
+            image = self.cam.get_newest_image()
+            spectrum = image.mean(axis=0)
+
+            wl = self.kymera.get_calibration_nm()
+            laser_wl = float(self.laser_edit.text())
+            raman = self.spec.wavelength_to_raman_shift(wl, laser_wl)
+
+            self.last_spectrum = spectrum
+            self.last_wavelength = wl
+            self.last_raman = raman
+
+            self.update_plot()
+        
+        except Exception:
+            pass 
+    
+    def stop_live(self):
+        self.live_timer.stop()
+        self.cam.abort()
+
+        self.start_cont_btn.setEnabled(True)
+        self.stop_cont_btn.setEnabled(False)
+        self.status_label.setText("Live acquisition stopped")
+
+
+
     
     def show_error(self, msg):
         QMessageBox.critical(self, "Acquisition error", msg)
         self.status_label.setText("Error")
+        self.acquire_btn.setEnabled(True)
     
 if __name__ == "__main__":
     app = QApplication(sys.argv)
