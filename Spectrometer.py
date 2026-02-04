@@ -131,12 +131,6 @@ class AndorCameraController:
     def get_image_mode_parameters(self):
         return self.cam.get_image_mode_parameters()
     
-    def setup_cont_mode(self, cycle_time=0):
-        self.cam.setup_cont_mode(cycle_time)
-    
-    def get_cont_mode_parameters(self):
-        return self.cam.get_cont_mode_parameters()
-    
     def set_fvb(self):
         with self._lock:
             self.cam.set_roi(vbin="full")
@@ -185,6 +179,15 @@ class AndorCameraController:
             self.cam.set_acquisition_mode(mode)
             self.acquisition_mode = mode
     
+    def start_acqusition(self):
+        self.cam.start_acqusition()
+    
+    def stop_acqusition(self):
+        self.cam.stop_acquisition()
+    
+    def get_newest_image(self):
+        return self.cam.get_newest_image()
+    
     def setup_accum_mode(self, num_acc, cycle_time_acc=0):
         self.cam.setup_accum_mode(num_acc, cycle_time_acc)
     
@@ -196,8 +199,18 @@ class AndorCameraController:
     
     def get_kinetic_mode_parameters(self):
         return self.cam.get_kinetic_mode_parameters()
+    
+    def setup_cont_mode(self, cycle_time=0):
+        self.cam.setup_cont_mode(cycle_time)
+    
+    def get_cont_mode_parameters(self):
+        return self.cam.get_cont_mode_parameters()
+    
         
     # Acquisition
+    def abort(self):
+        self.cam.clear_acquisition()
+
     def acquire_single(self):
         """Blocking single acquisition"""
         with self._lock:
@@ -386,19 +399,24 @@ class SpectrometerController:
         return spectrum, wl, img"""
     
     def acquire_spectrum(self, laser_wl):
-        if image is None:
+        try:
             image = self.acquire_image()
-        spectrum = image.mean(axis=0)
-        wl = self.kymera.get_calibration_nm()
-        raman = self.wavelength_to_raman_shift(wl, laser_wl)
-        return spectrum, wl, raman
+            spectrum = image.mean(axis=0)
+            wl = self.kymera.get_calibration_nm()
+            raman = self.wavelength_to_raman_shift(wl, laser_wl)
+            return spectrum, wl, raman
+        finally:
+            self.camera.abort()   
     
-    def acquire_spectrum_software(self, laser_wl):
-        image = self.camera.acquire_software_triggered()
-        spectrum = image.mean(axis=0)
-        wl = self.kymera.get_calibration_nm()
-        raman = self.wavelength_to_raman_shift(wl, laser_wl)
-        return spectrum, wl, raman
+    def acquire_spectrum_software(self, laser_wl, pixel_width=26.0):
+        try:
+            image = self.camera.acquire_software_triggered()
+            spectrum = image.mean(axis=0)
+            wl = self.kymera.get_calibration_nm()
+            raman = self.wavelength_to_raman_shift(wl, laser_wl)
+            return spectrum, wl, raman
+        finally:
+            self.camera.abort()
     
     def save_spectrum_csv(self, spectrum, wavelength_nm, filename=None):
         if filename is None:
