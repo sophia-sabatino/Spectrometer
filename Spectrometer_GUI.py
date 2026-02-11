@@ -456,6 +456,8 @@ class SpectrometerGUI(QWidget):
             fan = self.cam.get_fan_mode()
         
             self.temp_status_label.setText(f"Temp: {temp:.1f} °C | Status: {status} | Cooler: {'ON' if cooler else 'OFF'} | Fan: {fan}")
+            self.cam.update_fan_auto(threshold=10)
+            print(self.cam.get_fan_mode())
         except Exception as e:
             pass 
     
@@ -659,9 +661,9 @@ class SpectrometerGUI(QWidget):
     
     def start_live(self):
         try:
-            self.cam.abort()
             self.cam.set_acquisition_mode("cont")
             cycle = self.cont_cycle_spin.value()
+            self.cam.setup_cont_mode(cycle_time=cycle)
             self.cam.start_acquisition()
             self.live_timer.start(int(cycle*1000))
             self.start_cont_btn.setEnabled(False)
@@ -691,7 +693,7 @@ class SpectrometerGUI(QWidget):
     
     def stop_live(self):
         self.live_timer.stop()
-        self.cam.abort()
+        self.cam.stop_acquisition()
 
         self.start_cont_btn.setEnabled(True)
         self.stop_cont_btn.setEnabled(False)
