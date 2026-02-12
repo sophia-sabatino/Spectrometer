@@ -41,7 +41,7 @@ class AndorCameraController:
         "Open camera connection"
         if not self.connected:
             self.cam = Andor.AndorSDK2Camera()
-            self.cam.set_fan_mode("full")
+            self.cam.set_fan_mode("low")
             self.connected = True
 
     def disconnect(self):
@@ -49,20 +49,6 @@ class AndorCameraController:
         if self.connected:
             self.cam.close()
             self.connected = False
-
-
-    # Cooling control
-    """def enable_cooling(self, temperature):
-        with self._lock:
-            self.cam.set_cooler(True)
-            self.cam.set_temperature(temperature)
-            self.cooler_enabled = True
-            self.temperature_setpoint = temperature
-
-    def disable_cooling(self):
-        with self._lock:
-            self.cam.set_cooler(False)
-            self.cooler_enabled = False"""
     
     # New cooling control
     def cooler(self):
@@ -72,15 +58,29 @@ class AndorCameraController:
         if on:
             self.cam.set_fan_mode("full")
         self.cam.set_cooler(on)
+        self.cooler_enabled = on
     
     def get_temp_status(self):
         return self.cam.get_temperature_status()
     
     def set_temp(self, temp, enable_cooler=True):
         self.cam.set_temperature(temp, enable_cooler)
+        self.temperature_setpoint = temp
+        self.cooler_enabled = enable_cooler
 
     def get_temperature(self):
         return self.cam.get_temperature()
+    
+    def update_fan_auto(self, threshold=10):
+        print("cooler:", self.cooler_enabled, self.temperature_setpoint)
+        if not self.cooler_enabled or self.temperature_setpoint is None:
+            return
+        current_temp = self.get_temperature()
+        set_temp = self.temperature_setpoint
+        if abs(current_temp - set_temp) < threshold:
+            self.cam.set_fan_mode("full")
+        else:
+            self.cam.set_fan_mode("low")
 
     # Readout / ROI
     def set_roi(self, hbin=1, vbin=1,
@@ -138,6 +138,9 @@ class AndorCameraController:
     
     def get_all_vsspeeds(self):
         return self.cam.get_all_vsspeeds()
+    
+    def set_vsspeed(self, speed):
+        self.cam.set_vsspeed(speed)
     
     def get_max_vsspeed(self):
         return self.cam.get_max_vsspeed()
@@ -292,6 +295,7 @@ class KymeraController:
     #sets central wavelength
     def set_central_wavelength(self, wl_nm):
         self.spec.set_wavelength(wl_nm * 1e-9)
+        self.spec.setup_pixels_from_camera(self.camera.cam)
         self._wl_cache = None
     
     def get_number_pixels(self):
@@ -335,7 +339,7 @@ class KymeraController:
         return width_m * 1e6
 
     #fixed!! :)
-    def set_slit_width_um(self, width_um, slit="input side"):
+    def set_slit_width_um(self, width_um, slit="input_side"):
         width_m = width_um * 1e-6
         self.spec.set_slit_width(slit, width_m)
     
@@ -399,24 +403,18 @@ class SpectrometerController:
         return spectrum, wl, img"""
     
     def acquire_spectrum(self, laser_wl):
-        try:
-            image = self.acquire_image()
-            spectrum = image.mean(axis=0)
-            wl = self.kymera.get_calibration_nm()
-            raman = self.wavelength_to_raman_shift(wl, laser_wl)
-            return spectrum, wl, raman
-        finally:
-            self.camera.abort()   
+        image = self.acquire_image()
+        spectrum = image.mean(axis=0)
+        wl = self.kymera.get_calibration_nm()
+        raman = self.wavelength_to_raman_shift(wl, laser_wl)
+        return spectrum, wl, raman  
     
     def acquire_spectrum_software(self, laser_wl, pixel_width=26.0):
-        try:
-            image = self.camera.acquire_software_triggered()
-            spectrum = image.mean(axis=0)
-            wl = self.kymera.get_calibration_nm()
-            raman = self.wavelength_to_raman_shift(wl, laser_wl)
-            return spectrum, wl, raman
-        finally:
-            self.camera.abort()
+        image = self.camera.acquire_software_triggered()
+        spectrum = image.mean(axis=0)
+        wl = self.kymera.get_calibration_nm()
+        raman = self.wavelength_to_raman_shift(wl, laser_wl)
+        return spectrum, wl, raman
     
     def save_spectrum_csv(self, spectrum, wavelength_nm, filename=None):
         if filename is None:

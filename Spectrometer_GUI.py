@@ -173,6 +173,16 @@ class SpectrometerGUI(QWidget):
         exposure_box.setLayout(exposure_layout)
         controls_layout.addWidget(exposure_box)
 
+        self.vsspeed_combo = QComboBox()
+        self.vsspeed_combo.setToolTip("Vertical shift speed")
+        vs_box = QGroupBox("Vertical Shift Speed")
+        vs_layout = QHBoxLayout()
+        vs_layout.addWidget(QLabel("Speed:"))
+        vs_layout.addWidget(self.vsspeed_combo)
+        vs_box.setLayout(vs_layout)
+        controls_layout.addWidget(vs_box)
+
+
         self.roi_box = QGroupBox("ROI/Binning")
         roi_layout = QGridLayout()
 
@@ -424,6 +434,14 @@ class SpectrometerGUI(QWidget):
             current_exp = self.cam.get_exposure()
             self.exposure_spin.setValue(current_exp)
 
+            vs_speeds = self.cam.get_all_vsspeeds()
+            self.vsspeed_combo.clear()
+            for i, v in enumerate(vs_speeds):
+                self.vsspeed_combo.addItem(f"{v:.2f} ", i)
+            self.vsspeed_combo.setCurrentIndex(0)
+            self.cam.set_vsspeed(0)
+            self.vsspeed_combo.currentIndexChanged.connect(self.set_vsspeed_from_gui)
+
             self.cam.set_readout_mode("fvb")
             self.geom_combo.setCurrentText("fvb")
             self.update_geometry_ui("fvb")
@@ -460,7 +478,6 @@ class SpectrometerGUI(QWidget):
             fan = self.cam.get_fan_mode()
         
             self.temp_status_label.setText(f"Temp: {temp:.1f} °C | Status: {status} | Cooler: {'ON' if cooler else 'OFF'} | Fan: {fan}")
-            print(self.cam.get_fan_mode())
         except Exception as e:
             pass 
     
@@ -519,6 +536,14 @@ class SpectrometerGUI(QWidget):
             self.status_label.setText(f"Exposure time: {exp:.3f} s")
         except Exception as e:
             QMessageBox.critical(self, "Exposure error", str(e))
+    
+    def set_vsspeed_from_gui(self, index):
+        try:
+            self.cam.set_vsspeed(index)
+            v = self.vsspeed_combo.currentText()
+            self.status_label.setText(f"Vertical shift speed: {v}")
+        except Exception as e:
+            QMessageBox.critical(self, "Vertical shift speed error", str(e))
 
     def apply_roi(self):
         try: 
