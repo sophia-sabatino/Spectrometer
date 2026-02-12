@@ -93,7 +93,7 @@ class SpectrometerGUI(QWidget):
         controls_layout.addWidget(cooling_box)
         controls_layout.addWidget(self.temp_status_label)
 
-        fan_box = QGroupBox("Fan")
+        """fan_box = QGroupBox("Fan")
         fan_layout = QHBoxLayout()
         self.fan_combo = QComboBox()
         self.fan_combo.addItems(["full", "low", "off"])
@@ -102,7 +102,7 @@ class SpectrometerGUI(QWidget):
         fan_layout.addWidget(self.fan_combo)
 
         fan_box.setLayout(fan_layout)
-        controls_layout.addWidget(fan_box)
+        controls_layout.addWidget(fan_box)"""
 
         trigger_box = QGroupBox("Trigger")
         trigger_layout = QHBoxLayout()
@@ -370,7 +370,7 @@ class SpectrometerGUI(QWidget):
         self.cooler_on.clicked.connect(self.enable_cooling)
         self.cooler_off.clicked.connect(self.disable_cooling)
         self.apply_roi_btn.clicked.connect(self.apply_roi)
-        self.fan_combo.currentTextChanged.connect(self.set_fan_mode)
+        #self.fan_combo.currentTextChanged.connect(self.set_fan_mode)
         self.geom_combo.currentTextChanged.connect(self.set_geometry_mode)
         self.geom_combo.currentTextChanged.connect(self.update_geometry_ui)
         self.trigger_combo.currentTextChanged.connect(self.set_trigger_mode)
@@ -395,11 +395,14 @@ class SpectrometerGUI(QWidget):
         self.cooler_off.setEnabled(state)
         self.temp_setpoint.setEnabled(state)
         self.apply_roi_btn.setEnabled(state)
-        self.fan_combo.setEnabled(state)
+        #self.fan_combo.setEnabled(state)
         
     def connect_devices(self):
         try:
             self.cam.connect()
+
+            temp = self.temp_setpoint.value()
+            self.cam.set_temp(temp, enable_cooler=True)
 
             self.cam.set_readout_mode("image")
             self.cam.setup_image_mode()
@@ -453,10 +456,10 @@ class SpectrometerGUI(QWidget):
             temp = self.cam.get_temperature()
             status = self.cam.get_temp_status()
             cooler = self.cam.cooler()
+            self.cam.update_fan_auto(threshold=10)
             fan = self.cam.get_fan_mode()
         
             self.temp_status_label.setText(f"Temp: {temp:.1f} °C | Status: {status} | Cooler: {'ON' if cooler else 'OFF'} | Fan: {fan}")
-            self.cam.update_fan_auto(threshold=10)
             print(self.cam.get_fan_mode())
         except Exception as e:
             pass 
