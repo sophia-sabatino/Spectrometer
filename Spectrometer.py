@@ -295,7 +295,6 @@ class KymeraController:
     #sets central wavelength
     def set_central_wavelength(self, wl_nm):
         self.spec.set_wavelength(wl_nm * 1e-9)
-        self.spec.setup_pixels_from_camera(self.camera.cam)
         self._wl_cache = None
     
     def get_number_pixels(self):

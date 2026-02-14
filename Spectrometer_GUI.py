@@ -351,7 +351,7 @@ class SpectrometerGUI(QWidget):
         wl_box = QGroupBox("Central wavelength")
         wl_layout = QHBoxLayout()
         self.center_wl_spin = QDoubleSpinBox()
-        self.center_wl_spin.setRange(200, 1200)
+        self.center_wl_spin.setRange(400, 1200)
         self.center_wl_spin.setDecimals(2)
         self.center_wl_spin.setValue(600)
         self.center_wl_spin.setSuffix("nm")
@@ -537,8 +537,9 @@ class SpectrometerGUI(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Exposure error", str(e))
     
-    def set_vsspeed_from_gui(self, index):
+    def set_vsspeed_from_gui(self, _):
         try:
+            index = self.vsspeed_combo.currentIndex()
             self.cam.set_vsspeed(index)
             v = self.vsspeed_combo.currentText()
             self.status_label.setText(f"Vertical shift speed: {v}")
@@ -607,7 +608,7 @@ class SpectrometerGUI(QWidget):
         
         try:
             wl = self.center_wl_spin.value()
-            self.kymera.set_central_wavelength(wl*10e-9)
+            self.kymera.set_central_wavelength(wl)
             self.kymera.setup_from_camera(self.cam.cam)
             self.status_label.setText(f"Central wavelength: {wl:.2f} nm")
             if self.last_spectrum is not None:
