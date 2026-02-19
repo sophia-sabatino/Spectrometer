@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Spectrometer</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        .container {
+            display: flex;
+            height: 100vh;
+        }
+        .controls {
+            width: 380px;
+            padding: 10px 15px;
+            border-right: 1px solid #ccc;
+            overflow-y: auto;
+        }
+        .group {
+            border: 1px solid #aaa;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            padding: 8px 10px;
+        }
+        .group-title {
+            font-weight: bold;
+            margin-bottom: 6px;
+        }
+        .row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 6px;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        label {
+            min-width: 110px;
+            font-size: 0.9rem;
+        }
+        input[type="number"],
+        input[type="text"],
+        select {
+            padding: 2px 4px;
+            font-size: 0.9rem;
+            cursor: pointer;
+        }
+        #status {
+            margin-top: 6px;
+            font-size: 0.9rem;
+        }
+        #plot {
+            flex: 1;
+            min-height: 0;
+        }
+        .top-plot-controls {
+            margin-bottom: 8px;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="controls">
+        <div class="group">
+            <div class="group-title">Cooling</div>
+            <div class="row">
+                <label for="tempSetpoint">Setpoint (°C):</label>
+                <input id="tempSetpoint" type="number" min="-100" max="30" value="-80">
+            </div>
+            <div class="row">
+                <button id="coolerOnBtn">Cooler ON</button>
+                <button id="coolerOffBtn">Cooler OFF</button>
+            </div>
+        <div id="tempStatus">Temp: -- °C | Status: --</div>
+    </div>
+
+    <div class="group">
+        <div class="group-title">Trigger</div>
+        <div class="row">
+            <label for="triggerMode">Mode:</label>
+            <select id="triggerMode">
+                <option>Internal</option>
+                <option>Software</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="group">
+        <div class="group-title">Grating</div>
+        <div class="row">
+            <label for="gratingSelect">Select</label>
+            <select id="gratingSelect">
+
+            </select>
+        </div>
+    </div>
+
+    </div class="group">
+        <div class="group-title">Entrance slit</div>
+        <div class="row">
+            <label for="slitWidth">Width (µm):</label>
+            <input id="slitWidth" type="number" min="5" max="300" step="5" value="10">
+            <button id="setSlitBtn">Set</button>
+        </div>
+    </div>
+
+    <div class="group">
+        <div class="group-title">Exposure time</div>
+        <div class="row">
+            <label for="exposureTime">Exposure (s):</label>
+            <input id="exposureTime" type="number" min="0.001" max="1000" step="0.001" value="0.1">
+            <button id="setExposureBtn">Set</button>
+        </div>
+    </div>
+
+    <div class="group" id="roiGroup">
+        <div class="group-title">ROI / Binning</div>
+        <div class="row">
+            <label for="hbin">H Bin:</label>
+            <input id="hbin" type="number" min="1" max="16" value="1">
+            <label for="vbin">V Bin:</label>
+            <input id="vbin" type="number" min="1" max="16" value="1">
+        </div>
+        <div class="row">
+            <label for="hstart">H Start:</label>
+            <input id="hstart" type="number" min="0" value="0">
+            <label for="hend">H End:</label>
+            <input id="hend" type="number" min="0" value="0">
+        </div>
+        <div class="row">
+            <label for="vstart">V Start:</label>
+            <input id="vstart" type="number" min="0" value="0">
+            <label for="vend">V End:</label>
+            <input id="vend" type="number" min="0" value="0">
+        </div>
+        <div class="row">
+            <button id="setRoiBtn">Set ROI/Binning</button>
+        </div>
+    </div>
+
+    <div class="group" id="singleGroup" style="display:none;">
+        <div class="group-title">Single track</div>
+        <div class="row">
+            <label for="singleCenter">Center:</label>
+            <input id="singleCenter" type="number" min="0" value="100">
+        </div>
+        <div class="row">
+            <label for="singleWidth">Width:</label>
+            <input id="singleWidth" type="number" min="1" value="1">
+        </div>
+    </div>
+
+    <div class="group" id="multiGroup" style="display:none;">
+        <div class="group-title">Multi track</div>
+        <div class="row">
+            <label for="multiNumber">Number:</label>
+            <input id="multiNumber" type="number" min="1" value="1">
+        </div>
+        <div class="row">
+            <label for="multiHeight">Height:</label>
+            <input id="multiHeight" type="number" min="1" value="1">
+        </div>
+        <div class="row">
+            <label for="multiOffset">Offset:</label>
+            <input id="multiOffset" type="number" min="0" value="0">
+        </div>
+    </div>
+
+    <div class="group">
+        <div class="group-title">Readout mode</div>
+        <div class="row">
+            <label for="readoutMode">Mode:</label>
+            <select id="readoutMode">
+                <option value="fvb">full vertical binning</option>
+                <option value="image">image</option>
+                <option value="single_track">single track</option>
+                <option value="multi_track">multi track</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="group">
+        <div class="group-title">Acqusition mode</div>
+        <div class="row">
+            <label for="acqMode">Mode:</label>
+            <select id="acqMode">
+                <option value="single">single</option>
+                <option value="accum">accumulate</option>
+                <option value="kinetic">kinetic</option>
+                <option value="cont">continuous</option>
+            </select>
+        </div>
+
+        <div id="kineticParams" style="display:none;">
+            <div class="row">
+                <label for="kineticFrames">Frames:</label>
+                <input id="kineticFrames" type="number" min="1" value="10">
+            </div>
+            <div class="row">
+                <label for="kineticCycle">Cycle time (s):</label>
+                <input id="kineticCycle" type="number" min="0.001" step=0.1 value="0.1">
+            </div>
+        </div>
+
+        <div id="accumParams" style="display:none;">
+            <div class="row">
+                <label for="accumNum">Accumulations:</label>
+                <input id="accumNum" type="number" min="1" value="1">
+            </div>
+        </div>
+
+        <div id="contParams" style="display:none;">
+            <div class="row">
+                <label for="contCycle">Cycle time (s):</label>
+                <input id="contCycle" type="number" min="0.001" step=0.1 value="0.1">
+            </div>
+        </div>
+    </div>
+
+    <div class="group">
+        <div class="group-title">Central wavelength</div>
+        <div class="row">
+            <label for="centerWavelength">Wavelength (nm):</label>
+            <input id="centerWavelength" type="number" min="400" max="1200" step="10" value="600">
+            <button id="setWavelengthBtn">Set</button>
+        </div>
+    </div>
+
+    <div class="plot-area">
+        <div class="top-plot-controls">
+            <div class="row">
+                <label for="laserWavelength">Laser wavelength (nm):</label>
+                <input id="laserWavelength" type="number" min="400" max="1200" step="10" value="522">
+            </div>
+            <div class="row">
+                <button id="connectBtn">Connect</button>
+                <button id="acquireBtn" disabled>Acquire Spectrum</button>
+            </div>
+            <div class="row">
+                <label for="xAxisMode">X axis:</label>
+                <select id="xAxisMode">
+                    <option value="raman">Raman shift (cm⁻¹)</option>
+                    <option value="wavelength">Wavelength (nm)</option>
+                </select>
+            </div>
+            <div id="status">Disconnected</div>
+        </div>
+        <div id="plot"></div>
+    </div>
+</div> 
+
+<script>
+    // State
+    let connected = false;
+    let lastSpectrum = null;
+    let lastWavelength = null;
+    let lastRaman = null;
+    let liveTimer = null;
+
+    //Elements 
+    const connectBtn = document.getElementById("connectBtn");
+    const acquireBtn = documet.getElementById("acquireBtn");
+    const coolerOnBtn = document.getElementById("coolerOnBtn");
+    const coolerOffBtn = document.getElementById("coolerOffBtn");
+    const tempSetpoint = document.getElementById("temoSetpoint");
+    const tempStatus = document.getElementById("tempStatus");
+    const triggerMode = document.getElementById("triggerMode");
+    const gratingSelect = document.getElementById("gratingSelect");
+    const slitWidth = document.getElementById("slitWidth");
+    const setSlitBtn = document.getElementById("setSlitBtn");
+    const exposureTime = document.getElementById("exposureTime");
+    const setExposureBtn = document.getElementById("setExposureBtn");
+    const hbin = document.getElementById("hbin");
+    const vbin = document.getElementById("vbin");
+    const hstart = document.getElementById("hstart");
+    const hend = document.getElementById("hend");
+    const vstart = document.getElementById("vstart");
+    const vend = document.getElementById("vend");
+    const setRoiBtn = document.getElementById("setRoiBtn");
+    const singleGroup = document.getElementById("singleGroup");
+    const multiGroup = document.getElementById("multiGroup");
+    const singleCenter = document.getElementById("singleCenter");
+    const singleWidth = document.getElementById("singleWidth");
+    const multiNumber = document.getElementById("multiNumber");
+    const multiHeight = document.getElementById("multiHeight");
+    const multiOffset = document.getElementById("multiOffset");
+    const readoutMode = document.getElementById("readoutMode");
+    const acqMode = document.getElementById("acqMode");
+    const kineticParams = document.getElementById("kineticParams");
+    const kinieticFrames = document.getElementById("kineticFrames");
+    const kineticCycle = document.getElementById("kineticCycle");
+    const accumParams = document.getElementById("accumParams");
+    const accumNum = document.getElementById("accumNum");
+    const accumCycle = document.getElementById("accumCycle");
+    const contParams = document.getElementById("contParams");
+    const contCycle = document.getElementById("contCycle");
+    const centerWavelength = document.getElementById("centerWavelength");
+    const setWavelengthBtn = document.getElementById("setWavelengthBtn");
+    const startLiveBtn = document.getElementById("startLiveBtn");
+    const stopLiveBtn = document.getElementById("stopLiveBtn");
+    const laserWavelength = document.getElementById("laserWavelength");
+    const xAxisMode = document.getElementById("xAxisMode");
+    const statusDisplay = document.getElementById("status");
+
+    //Plot init
+    Plotly.newPlot("plot", [{
+        x: [],
+        y: [],
+        mode: "lines",
+        name: "Spectrum"
+    }], {
+        xaxis: { title: "Raman shift (cm⁻¹)", autorange: "reversed" },
+        yaxis: { title: "Intensity (counts)" },
+        margin: { t: 20 }
+    });
+
+    function setConnected(state) {
+        connected = state;
+        acquireBtn.disabled = !state;
+        coolerOnBtn.disabled = !state;
+        coolerOffBtn.disabled = !state;
+        tempSetpoint.disabled = !state;
+        setRoiBtn.disabled = !state;
+    }
+
+    async function connectDevices() {
+        try {
+            const camResp = await fetch("/api/camera/status");
+            const camStatus = await camResp.json();
+
+            const kyResp = await fetch("/api/kymera/status");
+            const kyStatus = await kyResp.json();
+
+            if (camStatus.exposure !== undefined) {
+                exposureTime.value = cameStatus.exposure;
+            }
+
+            gratingSelect.innerHTML = "";
+            const currentGrating = kyStatys.grating ?? 1;
+            const gratings = ["Grating 0", "Grating 1", "Grating 2"];
+            gratings.forEach(g, i) => {
+                const opt = document.createElement("option");
+                opt.value = i;
+                opt.textContent = '${i}: ${g}';
+                gratingSelect.appendChild(opt);
+            });
+            gratingSelect.value = String(currentGrating);
+
+            if (kyStatus.central_wavelength_nm !== undefined) {
+                centerWavelength.value = kyStatus.central_wavelength_nm.toFixed(2);
+            }
+
+            statusLabel.textContent = "Connected";
+            setConnected(true);
+
+        } catch (e) {
+            console.error(e);
+            alert("Connection error: " + e);
+            setConnected(false);
+            statusLabel.textContent = "Disconnected";
+        }
+    }
+
+    async function updateTemperature() {
+        if (!connected) {
+            tempStatus.textContent = "Temp: -- °C | Status: Disconnected";
+            return;
+        }
+        try {
+            const resp = await fetch("/api/camera/temperature");
+            const data = await resp.json();
+            const t = data.temperature ?? NaN;
+            const st = data.status ?? "--";
+            tempStatus.textContent = `Temp: ${isNaN(t) ? "--" : t.toFixed(1) + " °C"} | Status: ${st}`;
+        } catch (e) {
+            //ignore transient errors 
+        }
+    }
+
+    async function setCooling(on) {
+        if (!connected) return;
+        try {
+            if (on) {
+                const t = parseFloat(tempSetpoint.value);
+                await fetch("/api/camera/cooler", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json" },
+                    body: JSON.stringify({ on: true, setpoint: t })
+                });
+            } else {
+                await fetch("/api/camera/cooler", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json" },
+                    body: JSON.stringify({ on: false })
+
+                });
+            }
+        } catch (e) {
+            alert("Cooling error: " + e);
+        }
+    }
+
+    async function setTrigger() {
+        if (!connected) return;
+        try {
+            await fetch("/api/camera/trigger_mode", {
+                method: "POST",
+                headers: {"Content-Type": "application/json" },
+                body: JSON.stringify({ mode })
+            });
+            statusLabel.textContent = 'Trigger mode: ${triggerMode.value}';
+        } catch (e) {
+            console.warn("Trigger mode endpoint not implemented; ignoring.");
+        }
+    }
+
+    async function setGrating() {
+        if (!connected) return;
+        const idx = parseInt(gratingSelect.value, 10);
+        try {
+            await fetch("/api/kymera/grating", {
+                method: "POST",
+                headers: {"Content-Type": "application/json" },
+                body: JSON.stringify({ grating: idx })
+            });
+            statusLabel.textContent = 'Grating: ${idx}';
+        } catch(e) {
+            alert("Grating error: " + e);
+        }
+    }
+
+    async function setSlit() {
+        if (!connected) return;
+        const width = parseFloat(slitWidth.value);
+        try {
+            await fetch("/api/kymera/slit_width", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ width_um: width })
+            });
+            statusLabel.textContent = `Slit = ${width.toFixed(1)} µm`;
+        } catch(e) {
+            alert("Slit error: " + e);
+        }
+    }
+
+    async function setExposure() {
+        if (!connected) return;
+        const exp = parseFloat(exposureTime.value);
+        try {
+            await fetch("/api/camera/exposure", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ exposure_s: exp })
+            });
+            statusLabel.textContent = `Exposure = ${exp.toFixed(3)} s`;
+        } catch(e) {
+            alert("Exposure error: " + e);
+        }
+    }
+
+    async function setRoi() {
+        if (!connected) return;
+        const payload = {
+            hbin: parseInt(hbin.value, 10),
+            vbin: parseInt(vbin.value, 10),
+            hstart: parseInt(hstart.value, 10),
+            hend: parseInt(hend.value, 10) || null,
+            vstart: parseInt(vstart.value, 10),
+            vend: parseInt(vend.value, 10) || null
+        };
+        try {
+            await fetch("/api/camera/roi", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            statusLabel.textContent = `ROI set (hbin=${payload.hbin}, vbin=${payload.vbin})`;
+        } catch(e) {
+            alert("ROI error: " + e);
+        }
+    }
+
+    function updateGeometryUI() {
+        const mode = readoutMode.value;
+        singleGroup.style.display = mode === "single_track" ? "block" : "none";
+        multiGroup.style.display = mode === "multi_track" ? "block" : "none";
+        document.getElementById("roiGroup").style.display = mode === "image" ? "block" : "block"; 
+    }
+
+    async function setReadoutMode() {
+        if (!connected) return;
+        const mode = readoutode.value;
+        try {
+            await fetch("/api/camera/readout_mode", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ mode })
+            });
+            statusLabel.textContent = `Readout mode: ${mode}`;
+        } catch(e) {
+            console.warn("Readout mode endpoint not implemented; ignoring.");
+        }
+        updateGeometryUI();
+    }
+
+    function updateAcqUI() {
+        const mode = acqMode.value;
+        kinetcParams.style.display = mode === "kinetic" ? "block" : "none";
+        accumParams.style.display = mode === "accum" ? "block" : "none";
+        contParams.style.display = mode === "cont" ? "block" : "none";
+    }
+
+    async function setCentralWavelength() {
+        if (!connected) return;
+        const wl = parseFloat(centerWavelength.value);
+        try {
+            await fetch("/api/kymera/central_wavelength", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ wavelength_nm: wl })
+            });
+            statusLabel.textContent = `Central wavelength: ${wl.toFixed(2)} nm`;
+            if (lastSpectrum) updatePlot();
+        } catch(e) {
+            alert("Central wavelength error: " + e);
+        }
+    }
+
+    async function acquireSpectrum() {
+        if (!connected) return;
+        const laser = parseFloat(laserWavelength.value);
+        if (isNaN(laser)) {
+            alert("Laser wavelength must be a number");
+            return;
+        }
+
+        statusLabel.textContent = "Acquiring...";
+        acquireBtn.disabled = true;
+
+        try {
+            const resp = await fetch("/api/spectrm/acquire", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ laser_wavelength_nm: laser })
+            });
+            if (!resp.ok) throw new Error("Acquisition failed");
+            const data = await resp.json();
+            lastSpectrum = data.intensity;
+            lastWavelength = data.wavelength_nm;
+            lastRaman = data.raman_shift;
+            updatePlot();
+            statusLabel.textContent = "Done";
+        } catch(e) {
+            alert("Acquisition error: " + e);
+            statusLabel.textContent = "Error";
+        } finally {
+            acquireBtn.disabled = false;
+        }
+    }
+
+    function updatePlot() {
+        if (!lastSpectrum || !lastWavelength || !lastRaman) return;
+        const mode = xAxisMode.value;
+        let x, xTitle, reversed;
+        if (mode === "raman") {
+            x = lastRaman;
+            xTitle = 'Raman shift (cm⁻¹)';
+            reversed = true;
+        } else {
+            x = lastWavelength;
+            xTitle = 'Wavelength (nm)';
+            reversed = false;
+        }
+        Plotly.react("plot", [{
+            x,
+            y: lastSpectrum,
+            mode: "lines",
+            name: "Spectrum"
+        }], {
+            xaxis: { title: xTitle, autorange: reversed ? "reversed" : true },
+            yaxis: { title: "Intensity (counts)" },
+            margin: { t: 20 }
+        });
+    }
+
+    function startLive() {
+        if (!connected) return;
+        const cycle = parseFloat(contCycle.value);
+        if (isNaN(cycle) || cycle <= 0) {
+            alert("invalid cycle time");
+            return;
+        }
+        if (liveTimer) clearInterval(liveTimer);
+        liveTimer = setInterval(acquireSpectrum. cycle * 1000);
+        startLiveBtn.disabled = true;
+        stopLiveBtn.disabled = false;
+        statusLabel.textContent = "Live acquisition started";
+    }
+
+    function stopLive() {
+        if (liveTimer) clearInterval(liveTimer);
+        liveTimer = null;
+        startLiveBtn.disabled = false;
+        stopLiveBtn.disabled = true;
+        statusLabel.textContent = "Live acquisition stopped";
+    }
+
+    connectBtn.addEventListener("click", connectDevices);
+    coolerOnBtn.addEventListener("click", () => setCooling(true));
+    coolerOffBtn.addEventListener("click", () => setCooling(false));
+    triggerMode.addEventListener("change", setTrigger);
+    gratingSelect.addEventListener("change", setGrating);
+    setSlitBtn.addEventListener("click", setSlit);
+    setExposureBtn.addEventListener("click", setExposure);
+    setRoiBtn.addEventListener("click", setRoi);
+    readoutMode.addEventListener("change", setReadoutMode);
+    acqMode.addEventListener("change", updateAcqUI);
+    setWavelengthBtn.addEventListener("click", setCentralWavelength);
+    acquireBtn.addEventListener("click", acquireSpectrum);
+    xAxisMode.addEventListener("change", updatePlot);
+    startLiveBtn.addEventListener("click", startLive);
+    stopLiveBtn.addEventListener("click", stopLive);
+
+    setInterval(updateTemperature, 1000);
+
+    setConnected(false);
+    updateGeometryUI();
+    updateAcqUI();
+</script>
+</body>
+</html>
+
+
