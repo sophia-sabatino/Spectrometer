@@ -3,17 +3,16 @@ import threading
 import time
 
 from Spectrometer import AndorCameraController, KymeraController, SpectrometerController 
-from AndorDriver import AndorCameraController
-from KymeraDriver import KymeraController 
-from SpectrometerDriver import SpectrometerController 
+ 
 
 app = Flask(__name__)
 
 camera = AndorCameraController()
+camera.connect()
 kymera = KymeraController(device_index=0)
+kymera.setup_from_camera(camera.cam)
 spec = SpectrometerController(camera, kymera)
 
-camera.connect()
 
 @app.route("/api/camera/status")
 def camera_status():
