@@ -263,10 +263,10 @@
 
     //Elements 
     const connectBtn = document.getElementById("connectBtn");
-    const acquireBtn = documet.getElementById("acquireBtn");
+    const acquireBtn = document.getElementById("acquireBtn");
     const coolerOnBtn = document.getElementById("coolerOnBtn");
     const coolerOffBtn = document.getElementById("coolerOffBtn");
-    const tempSetpoint = document.getElementById("temoSetpoint");
+    const tempSetpoint = document.getElementById("tempSetpoint");
     const tempStatus = document.getElementById("tempStatus");
     const triggerMode = document.getElementById("triggerMode");
     const gratingSelect = document.getElementById("gratingSelect");
@@ -291,7 +291,7 @@
     const readoutMode = document.getElementById("readoutMode");
     const acqMode = document.getElementById("acqMode");
     const kineticParams = document.getElementById("kineticParams");
-    const kinieticFrames = document.getElementById("kineticFrames");
+    const kineticFrames = document.getElementById("kineticFrames");
     const kineticCycle = document.getElementById("kineticCycle");
     const accumParams = document.getElementById("accumParams");
     const accumNum = document.getElementById("accumNum");
@@ -340,12 +340,12 @@
             }
 
             gratingSelect.innerHTML = "";
-            const currentGrating = kyStatys.grating ?? 1;
+            const currentGrating = kyStatus.grating ?? 1;
             const gratings = ["Grating 0", "Grating 1", "Grating 2"];
-            gratings.forEach(g, i) => {
+            gratings.forEach((g, i) => {
                 const opt = document.createElement("option");
                 opt.value = i;
-                opt.textContent = '${i}: ${g}';
+                opt.textContent = `${i}: ${g}`;
                 gratingSelect.appendChild(opt);
             });
             gratingSelect.value = String(currentGrating);
@@ -354,14 +354,14 @@
                 centerWavelength.value = kyStatus.central_wavelength_nm.toFixed(2);
             }
 
-            statusLabel.textContent = "Connected";
+            statusDisplay.textContent = "Connected";
             setConnected(true);
 
         } catch (e) {
             console.error(e);
             alert("Connection error: " + e);
             setConnected(false);
-            statusLabel.textContent = "Disconnected";
+            statusDisplay.textContent = "Disconnected";
         }
     }
 
@@ -412,7 +412,7 @@
                 headers: {"Content-Type": "application/json" },
                 body: JSON.stringify({ mode })
             });
-            statusLabel.textContent = 'Trigger mode: ${triggerMode.value}';
+            statusDisplay.textContent = 'Trigger mode: ${triggerMode.value}';
         } catch (e) {
             console.warn("Trigger mode endpoint not implemented; ignoring.");
         }
@@ -427,7 +427,7 @@
                 headers: {"Content-Type": "application/json" },
                 body: JSON.stringify({ grating: idx })
             });
-            statusLabel.textContent = 'Grating: ${idx}';
+            statusDisplay.textContent = 'Grating: ${idx}';
         } catch(e) {
             alert("Grating error: " + e);
         }
@@ -442,7 +442,7 @@
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ width_um: width })
             });
-            statusLabel.textContent = `Slit = ${width.toFixed(1)} µm`;
+            statusDisplay.textContent = `Slit = ${width.toFixed(1)} µm`;
         } catch(e) {
             alert("Slit error: " + e);
         }
@@ -457,7 +457,7 @@
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ exposure_s: exp })
             });
-            statusLabel.textContent = `Exposure = ${exp.toFixed(3)} s`;
+            statusDisplay.textContent = `Exposure = ${exp.toFixed(3)} s`;
         } catch(e) {
             alert("Exposure error: " + e);
         }
@@ -479,7 +479,7 @@
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload)
             });
-            statusLabel.textContent = `ROI set (hbin=${payload.hbin}, vbin=${payload.vbin})`;
+            statusDisplay.textContent = `ROI set (hbin=${payload.hbin}, vbin=${payload.vbin})`;
         } catch(e) {
             alert("ROI error: " + e);
         }
@@ -494,14 +494,14 @@
 
     async function setReadoutMode() {
         if (!connected) return;
-        const mode = readoutode.value;
+        const mode = readoutMode.value;
         try {
             await fetch("/api/camera/readout_mode", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ mode })
             });
-            statusLabel.textContent = `Readout mode: ${mode}`;
+            statusDisplay.textContent = `Readout mode: ${mode}`;
         } catch(e) {
             console.warn("Readout mode endpoint not implemented; ignoring.");
         }
@@ -510,7 +510,7 @@
 
     function updateAcqUI() {
         const mode = acqMode.value;
-        kinetcParams.style.display = mode === "kinetic" ? "block" : "none";
+        kineticParams.style.display = mode === "kinetic" ? "block" : "none";
         accumParams.style.display = mode === "accum" ? "block" : "none";
         contParams.style.display = mode === "cont" ? "block" : "none";
     }
@@ -524,7 +524,7 @@
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ wavelength_nm: wl })
             });
-            statusLabel.textContent = `Central wavelength: ${wl.toFixed(2)} nm`;
+            statusDisplay.textContent = `Central wavelength: ${wl.toFixed(2)} nm`;
             if (lastSpectrum) updatePlot();
         } catch(e) {
             alert("Central wavelength error: " + e);
@@ -539,11 +539,11 @@
             return;
         }
 
-        statusLabel.textContent = "Acquiring...";
+        statusDisplay.textContent = "Acquiring...";
         acquireBtn.disabled = true;
 
         try {
-            const resp = await fetch("/api/spectrm/acquire", {
+            const resp = await fetch("/api/spectrum/acquire", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ laser_wavelength_nm: laser })
@@ -554,10 +554,10 @@
             lastWavelength = data.wavelength_nm;
             lastRaman = data.raman_shift;
             updatePlot();
-            statusLabel.textContent = "Done";
+            statusDisplay.textContent = "Done";
         } catch(e) {
             alert("Acquisition error: " + e);
-            statusLabel.textContent = "Error";
+            statusDisplay.textContent = "Error";
         } finally {
             acquireBtn.disabled = false;
         }
@@ -596,10 +596,10 @@
             return;
         }
         if (liveTimer) clearInterval(liveTimer);
-        liveTimer = setInterval(acquireSpectrum. cycle * 1000);
+        liveTimer = setInterval(acquireSpectrum, cycle * 1000);
         startLiveBtn.disabled = true;
         stopLiveBtn.disabled = false;
-        statusLabel.textContent = "Live acquisition started";
+        statusDisplay.textContent = "Live acquisition started";
     }
 
     function stopLive() {
@@ -607,7 +607,7 @@
         liveTimer = null;
         startLiveBtn.disabled = false;
         stopLiveBtn.disabled = true;
-        statusLabel.textContent = "Live acquisition stopped";
+        statusDisplay.textContent = "Live acquisition stopped";
     }
 
     connectBtn.addEventListener("click", connectDevices);
