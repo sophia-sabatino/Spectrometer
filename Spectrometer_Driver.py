@@ -1,9 +1,9 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 import threading
 import time
 
 from Spectrometer import AndorCameraController, KymeraController, SpectrometerController 
- 
+
 
 app = Flask(__name__)
 
@@ -13,6 +13,9 @@ kymera = KymeraController(device_index=0)
 kymera.setup_from_camera(camera.cam)
 spec = SpectrometerController(camera, kymera)
 
+@app.route("/")
+def index():
+    return render_template("Spectrometer_GUI.html")
 
 @app.route("/api/camera/status")
 def camera_status():
@@ -123,5 +126,5 @@ def shutdown():
     return jsonify({"status": "shutdown complete"})
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, use_reloader=False)
 
