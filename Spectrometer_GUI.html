@@ -20,6 +20,17 @@
             padding: 10px 15px;
             border-right: 1px solid #ccc;
             overflow-y: auto;
+            display: flex;
+            felx-direction: column;
+        }
+        .plot-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 10px;
+        }
+        #plot {
+            flex: 1;
         }
         .group {
             border: 1px solid #aaa;
@@ -76,157 +87,157 @@
                 <button id="coolerOffBtn">Cooler OFF</button>
             </div>
         <div id="tempStatus">Temp: -- °C | Status: --</div>
-    </div>
 
-    <div class="group">
-        <div class="group-title">Trigger</div>
-        <div class="row">
-            <label for="triggerMode">Mode:</label>
-            <select id="triggerMode">
-                <option>Internal</option>
-                <option>Software</option>
-            </select>
-        </div>
-    </div>
-
-    <div class="group">
-        <div class="group-title">Grating</div>
-        <div class="row">
-            <label for="gratingSelect">Select</label>
-            <select id="gratingSelect">
-
-            </select>
-        </div>
-    </div>
-
-    </div class="group">
-        <div class="group-title">Entrance slit</div>
-        <div class="row">
-            <label for="slitWidth">Width (µm):</label>
-            <input id="slitWidth" type="number" min="5" max="300" step="5" value="10">
-            <button id="setSlitBtn">Set</button>
-        </div>
-    </div>
-
-    <div class="group">
-        <div class="group-title">Exposure time</div>
-        <div class="row">
-            <label for="exposureTime">Exposure (s):</label>
-            <input id="exposureTime" type="number" min="0.001" max="1000" step="0.001" value="0.1">
-            <button id="setExposureBtn">Set</button>
-        </div>
-    </div>
-
-    <div class="group" id="roiGroup">
-        <div class="group-title">ROI / Binning</div>
-        <div class="row">
-            <label for="hbin">H Bin:</label>
-            <input id="hbin" type="number" min="1" max="16" value="1">
-            <label for="vbin">V Bin:</label>
-            <input id="vbin" type="number" min="1" max="16" value="1">
-        </div>
-        <div class="row">
-            <label for="hstart">H Start:</label>
-            <input id="hstart" type="number" min="0" value="0">
-            <label for="hend">H End:</label>
-            <input id="hend" type="number" min="0" value="0">
-        </div>
-        <div class="row">
-            <label for="vstart">V Start:</label>
-            <input id="vstart" type="number" min="0" value="0">
-            <label for="vend">V End:</label>
-            <input id="vend" type="number" min="0" value="0">
-        </div>
-        <div class="row">
-            <button id="setRoiBtn">Set ROI/Binning</button>
-        </div>
-    </div>
-
-    <div class="group" id="singleGroup" style="display:none;">
-        <div class="group-title">Single track</div>
-        <div class="row">
-            <label for="singleCenter">Center:</label>
-            <input id="singleCenter" type="number" min="0" value="100">
-        </div>
-        <div class="row">
-            <label for="singleWidth">Width:</label>
-            <input id="singleWidth" type="number" min="1" value="1">
-        </div>
-    </div>
-
-    <div class="group" id="multiGroup" style="display:none;">
-        <div class="group-title">Multi track</div>
-        <div class="row">
-            <label for="multiNumber">Number:</label>
-            <input id="multiNumber" type="number" min="1" value="1">
-        </div>
-        <div class="row">
-            <label for="multiHeight">Height:</label>
-            <input id="multiHeight" type="number" min="1" value="1">
-        </div>
-        <div class="row">
-            <label for="multiOffset">Offset:</label>
-            <input id="multiOffset" type="number" min="0" value="0">
-        </div>
-    </div>
-
-    <div class="group">
-        <div class="group-title">Readout mode</div>
-        <div class="row">
-            <label for="readoutMode">Mode:</label>
-            <select id="readoutMode">
-                <option value="fvb">full vertical binning</option>
-                <option value="image">image</option>
-                <option value="single_track">single track</option>
-                <option value="multi_track">multi track</option>
-            </select>
-        </div>
-    </div>
-
-    <div class="group">
-        <div class="group-title">Acqusition mode</div>
-        <div class="row">
-            <label for="acqMode">Mode:</label>
-            <select id="acqMode">
-                <option value="single">single</option>
-                <option value="accum">accumulate</option>
-                <option value="kinetic">kinetic</option>
-                <option value="cont">continuous</option>
-            </select>
-        </div>
-
-        <div id="kineticParams" style="display:none;">
+        <div class="group">
+            <div class="group-title">Trigger</div>
             <div class="row">
-                <label for="kineticFrames">Frames:</label>
-                <input id="kineticFrames" type="number" min="1" value="10">
-            </div>
-            <div class="row">
-                <label for="kineticCycle">Cycle time (s):</label>
-                <input id="kineticCycle" type="number" min="0.001" step=0.1 value="0.1">
+                <label for="triggerMode">Mode:</label>
+                <select id="triggerMode">
+                    <option>Internal</option>
+                    <option>Software</option>
+                </select>
             </div>
         </div>
 
-        <div id="accumParams" style="display:none;">
+        <div class="group">
+            <div class="group-title">Grating</div>
             <div class="row">
-                <label for="accumNum">Accumulations:</label>
-                <input id="accumNum" type="number" min="1" value="1">
+                <label for="gratingSelect">Select</label>
+                <select id="gratingSelect">
+
+                </select>
             </div>
         </div>
 
-        <div id="contParams" style="display:none;">
+        <div class="group">
+            <div class="group-title">Entrance slit</div>
             <div class="row">
-                <label for="contCycle">Cycle time (s):</label>
-                <input id="contCycle" type="number" min="0.001" step=0.1 value="0.1">
+                <label for="slitWidth">Width (µm):</label>
+                <input id="slitWidth" type="number" min="5" max="300" step="5" value="10">
+                <button id="setSlitBtn">Set</button>
             </div>
         </div>
-    </div>
 
-    <div class="group">
-        <div class="group-title">Central wavelength</div>
-        <div class="row">
-            <label for="centerWavelength">Wavelength (nm):</label>
-            <input id="centerWavelength" type="number" min="400" max="1200" step="10" value="600">
-            <button id="setWavelengthBtn">Set</button>
+        <div class="group">
+            <div class="group-title">Exposure time</div>
+            <div class="row">
+                <label for="exposureTime">Exposure (s):</label>
+                <input id="exposureTime" type="number" min="0.001" max="1000" step="0.001" value="0.1">
+                <button id="setExposureBtn">Set</button>
+            </div>
+        </div>
+
+        <div class="group" id="roiGroup">
+            <div class="group-title">ROI / Binning</div>
+            <div class="row">
+                <label for="hbin">H Bin:</label>
+                <input id="hbin" type="number" min="1" max="16" value="1">
+                <label for="vbin">V Bin:</label>
+                <input id="vbin" type="number" min="1" max="16" value="1">
+            </div>
+            <div class="row">
+                <label for="hstart">H Start:</label>
+                <input id="hstart" type="number" min="0" value="0">
+                <label for="hend">H End:</label>
+                <input id="hend" type="number" min="0" value="0">
+            </div>
+            <div class="row">
+                <label for="vstart">V Start:</label>
+                <input id="vstart" type="number" min="0" value="0">
+                <label for="vend">V End:</label>
+                <input id="vend" type="number" min="0" value="0">
+            </div>
+            <div class="row">
+                <button id="setRoiBtn">Set ROI/Binning</button>
+            </div>
+        </div>
+
+        <div class="group" id="singleGroup" style="display:none;">
+            <div class="group-title">Single track</div>
+            <div class="row">
+                <label for="singleCenter">Center:</label>
+                <input id="singleCenter" type="number" min="0" value="100">
+            </div>
+            <div class="row">
+                <label for="singleWidth">Width:</label>
+                <input id="singleWidth" type="number" min="1" value="1">
+            </div>
+        </div>
+
+        <div class="group" id="multiGroup" style="display:none;">
+            <div class="group-title">Multi track</div>
+            <div class="row">
+                <label for="multiNumber">Number:</label>
+                <input id="multiNumber" type="number" min="1" value="1">
+            </div>
+            <div class="row">
+                <label for="multiHeight">Height:</label>
+                <input id="multiHeight" type="number" min="1" value="1">
+            </div>
+            <div class="row">
+                <label for="multiOffset">Offset:</label>
+                <input id="multiOffset" type="number" min="0" value="0">
+            </div>
+        </div>
+
+        <div class="group">
+            <div class="group-title">Readout mode</div>
+            <div class="row">
+                <label for="readoutMode">Mode:</label>
+                <select id="readoutMode">
+                    <option value="fvb">full vertical binning</option>
+                    <option value="image">image</option>
+                    <option value="single_track">single track</option>
+                    <option value="multi_track">multi track</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="group">
+            <div class="group-title">Acqusition mode</div>
+            <div class="row">
+                <label for="acqMode">Mode:</label>
+                <select id="acqMode">
+                    <option value="single">single</option>
+                    <option value="accum">accumulate</option>
+                    <option value="kinetic">kinetic</option>
+                    <option value="cont">continuous</option>
+                </select>
+            </div>
+
+            <div id="kineticParams" style="display:none;">
+                <div class="row">
+                    <label for="kineticFrames">Frames:</label>
+                    <input id="kineticFrames" type="number" min="1" value="10">
+                </div>
+                <div class="row">
+                    <label for="kineticCycle">Cycle time (s):</label>
+                    <input id="kineticCycle" type="number" min="0.001" step=0.1 value="0.1">
+                </div>
+            </div>
+
+            <div id="accumParams" style="display:none;">
+                <div class="row">
+                    <label for="accumNum">Accumulations:</label>
+                    <input id="accumNum" type="number" min="1" value="1">
+                </div>
+            </div>
+
+            <div id="contParams" style="display:none;">
+                <div class="row">
+                    <label for="contCycle">Cycle time (s):</label>
+                    <input id="contCycle" type="number" min="0.001" step=0.1 value="0.1">
+                </div>
+            </div>
+        </div>
+
+        <div class="group">
+            <div class="group-title">Central wavelength</div>
+            <div class="row">
+                <label for="centerWavelength">Wavelength (nm):</label>
+                <input id="centerWavelength" type="number" min="400" max="1200" step="10" value="600">
+                <button id="setWavelengthBtn">Set</button>
+            </div>
         </div>
     </div>
 
