@@ -3,6 +3,7 @@ from pylablib.devices import Andor
 from pylablib.devices.Andor import Shamrock
 from pylablib.devices.Andor import AndorSDK2Camera
 from pybirch.Instruments.base import BaseMeasurementInstrument 
+import matplotlib.pyplot as plt
 
 class AndorCameraController:
     def __init__(self):
@@ -352,9 +353,46 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
         self.data_units = np.array(["counts"] * len(wl))
     
     def _perform_measurement_impl(self):
-        image = self.camera.acquire_single()
-        spectrum = image.mean(axis=0)
-        return np.array([spectrum])
+        #image = self.camera.acquire_single()
+        #spectrum = image.mean(axis=0)
+        #return np.array([spectrum])
+        try:
+            self.camera.set_acquisition_mode("single")
+            self.camera.set_exposure(self.exposure)
+
+            self.camera.start_acquisition()
+            img = self.camera.read_newest_image()
+
+            if img is None:
+                return np.array([np.nan])
+            
+            spectrum =  np.sum(img, axis=0)
+
+            if not hasattr(self, "_spec_initialized"):
+                self.data_columns = np.array([f"pix_{i}" for i in range(len(spectrum))])
+                self.data_units = np.array(["counts"] * len(spectrum))
+                self._spec_initialized = True
+            
+            img = self.camera.read_newest_image()
+            print(img.shape)
+            import matplotlib.pyplot as plt
+            plt.imshow(img)
+            plt.show()
+
+            plt.plot(img.sum(axis=0))
+            plt.show()
+            
+            return np.array([spectrum])
+        
+        except Exception as e:
+            print(f"Error during acquisition: {e}")
+            return np.array([np.nan])
+    
+    def get_status(self):
+        return {
+            "temperature": self.camera.get_temperature(),
+            "cooler": self.camera.cooler(),
+        }
     
     @property
     def settings(self):
