@@ -7,8 +7,8 @@ from pybirch.Instruments.base import BaseMeasurementInstrument
 class AndorSpectrometerDriver(BaseMeasurementInstrument):
     display_mode = "spectrum"
 
-    def __init__(self, name="Andor Spectrometer", adapter=""):
-        super().__init__(name, adapter)
+    def __init__(self, name="Andor Spectrometer"):
+        super().__init__(name)
         
         self.camera = AndorCameraController()
         self.kymera = KymeraController()
