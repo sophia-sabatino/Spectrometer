@@ -41,7 +41,7 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
             "exposure": self.camera.get_exposure(),
             "grating": self.kymera.get_grating(),
             "center_wavelength": self.kymera.get_central_wavelength(),
-            "temperature_setpoint": self.camera.temperature_setpoint(),
+            "temperature_setpoint": self.camera.temperature_setpoint,
         }
     
     @settings.setter
