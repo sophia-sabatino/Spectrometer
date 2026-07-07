@@ -344,9 +344,6 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
         
         self.camera = AndorCameraController()
         self.kymera = KymeraController()
-
-        self.data_columns = np.array([])
-        self.data_units = np.array([])
     
     def _connect_impl(self):
         try:
@@ -357,41 +354,29 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
             return False 
     
     def _initialize_impl(self):
-        wl = self.kymera.get_calibration_nm()
-
-        self.data_columns = np.array([f"{x:.3f}" for x in wl])
-        self.data_units = np.array(["counts"] * len(wl))
+        self.kymera.get_calibration_nm()
     
     def _perform_measurement_impl(self):
-        #image = self.camera.acquire_single()
-        #spectrum = image.mean(axis=0)
-        #return np.array([spectrum])
-        try:
-            img = self.camera.acquire_single()
+        img = self.camera.acquire_single()
+        if img is None:
+            raise RuntimeError("Camera returned no image (acquisition failed)")
+        
+        spectrum = np.asarray(img).sum(axis=0)
+        wavelengths = self.kymera.get_calibration_nm()
 
-            if img is None:
-                return np.array([np.nan])
-
-            print(img.shape)
-
-            plt.imshow(img)
-            plt.colorbar()
-            plt.show()
-
-            spectrum = img.sum(axis=0)
-
-            plt.figure()
-            plt.plot(spectrum)
-            plt.xlabel("Pixel")
-            plt.ylabel("Counts")
-            plt.title("Spectrum")
-            plt.show()
-
-            return np.array([spectrum])
-
-        except Exception as e:
-            print(f"Error during acquisition: {e}")
-            return np.array([np.nan])
+        if wavelengths.shape[0] != spectrum.shape[0]:
+            raise RuntimeError(
+                f"Wavelength axis length ({wavelengths.shape[0]}) does not match "
+                f"spectrum length ({spectrum.shape[0]}) — check binning/ROI vs. "
+                f"spectrograph pixel setup."
+            )
+        
+        return MeasurementResult.of(
+            Stream("spectrum", 
+                    signals=[Signal("intensity", spectrum, "counts")],
+                   coords=[Coordinate("wavelength", wavelengths, "nm")],
+                   display_mode="spectrum")
+        )
             
             
     def get_status(self):
