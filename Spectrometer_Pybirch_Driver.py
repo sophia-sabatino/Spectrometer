@@ -4,6 +4,7 @@ from pylablib.devices.Andor import Shamrock
 from pylablib.devices.Andor import AndorSDK2Camera
 from pybirch.Instruments.base import BaseMeasurementInstrument 
 import matplotlib.pyplot as plt
+import threading
 
 class AndorCameraController:
     def __init__(self):
@@ -325,6 +326,15 @@ class KymeraController:
             "central_wavelength_nm": self.get_central_wavelength(),
             "wavelength_range_nm": self.get_wavelength_span()
         }
+    
+    def get_flipper(self, flipper):
+        return self.spec.is_flipper_present(flipper)
+    
+    def get_flipper(self, flipper):
+        return self.spec.get_flipper_port(flipper)
+    
+    def set_flipper(self, flipper, port):
+        self.spec.set_flipper_port(flipper, port)
 
 class AndorSpectrometerDriver(BaseMeasurementInstrument):
     display_mode = "spectrum"
@@ -357,37 +367,33 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
         #spectrum = image.mean(axis=0)
         #return np.array([spectrum])
         try:
-            self.camera.set_acquisition_mode("single")
-            self.camera.set_exposure(self.exposure)
-
-            self.camera.start_acquisition()
-            img = self.camera.read_newest_image()
+            img = self.camera.acquire_single()
 
             if img is None:
                 return np.array([np.nan])
-            
-            spectrum =  np.sum(img, axis=0)
 
-            if not hasattr(self, "_spec_initialized"):
-                self.data_columns = np.array([f"pix_{i}" for i in range(len(spectrum))])
-                self.data_units = np.array(["counts"] * len(spectrum))
-                self._spec_initialized = True
-            
-            img = self.camera.read_newest_image()
             print(img.shape)
-            import matplotlib.pyplot as plt
+
             plt.imshow(img)
+            plt.colorbar()
             plt.show()
 
-            plt.plot(img.sum(axis=0))
+            spectrum = img.sum(axis=0)
+
+            plt.figure()
+            plt.plot(spectrum)
+            plt.xlabel("Pixel")
+            plt.ylabel("Counts")
+            plt.title("Spectrum")
             plt.show()
-            
+
             return np.array([spectrum])
-        
+
         except Exception as e:
             print(f"Error during acquisition: {e}")
             return np.array([np.nan])
-    
+            
+            
     def get_status(self):
         return {
             "temperature": self.camera.get_temperature(),
@@ -401,6 +407,8 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
             "grating": self.kymera.get_grating(),
             "center_wavelength": self.kymera.get_central_wavelength(),
             "temperature_setpoint": self.camera.temperature_setpoint,
+            "input_port": self.kymera.get_flipper("input"),
+            "output_port": self.kymera.get_flipper("output"),
         }
     
     @settings.setter
@@ -413,6 +421,10 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
             self.kymera.set_central_wavelength(float(settings["center_wavelength"]))
         if "temperature_setpoint" in settings:
             self.camera.set_temp(float(settings["temperature_setpoint"]))
+        if "input_port" in settings:
+            self.kymera.set_flipper("input", settings["input_port"])
+        if "output_port" in settings:
+            self.kymera.set_flipper("output", settings["output_port"])
 
 
     def _shutdown_impl(self):
