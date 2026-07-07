@@ -6,6 +6,33 @@ from pybirch.Instruments.base import BaseMeasurementInstrument
 import matplotlib.pyplot as plt
 import threading
 
+settings_schema = {
+    "type": "object",
+    "x-ui-sections": [
+        {"name": "acquisition", "label": "Acquisition"},
+        {"name": "spectrograph", "label": "Spectrograph"},
+        {"name": "cooling", "label": "Cooling"},
+    ],
+    "properties": {
+        "exposure": {
+            "type": "number", "title": "Exposure", "default": 0.1,
+            "minimum": 0.001, "x-ui-unit": "s", "x-ui-group": "acquisition",
+        },
+        "grating": {
+            "type": "integer", "title": "Grating", "default": 0,
+            "enum": [0, 1, 2], "x-ui-group": "spectrograph",
+        },
+        "center_wavelength": {
+            "type": "number", "title": "Center Wavelength", "default": 500.0,
+            "x-ui-unit": "nm", "x-ui-group": "spectrograph",
+        },
+        "temperature_setpoint": {
+            "type": "number", "title": "Temperature Setpoint", "default": -60.0,
+            "x-ui-unit": "°C", "x-ui-group": "cooling",
+        },
+    },
+}
+
 class AndorCameraController:
     def __init__(self):
         self.cam = None
@@ -341,43 +368,40 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
 
     def __init__(self, name="Andor Spectrometer"):
         super().__init__(name)
-        
         self.camera = AndorCameraController()
         self.kymera = KymeraController()
-    
+        self.data_columns = np.array([])
+        self.data_units = np.array([])
+
     def _connect_impl(self):
         try:
             self.camera.connect()
             self.kymera.setup_from_camera(self.camera.cam)
             return True
         except Exception:
-            return False 
-    
+            return False
+
     def _initialize_impl(self):
-        self.kymera.get_calibration_nm()
-    
+        wl = self.kymera.get_calibration_nm()
+        self.data_columns = np.array([f"{x:.3f}" for x in wl])
+        self.data_units = np.array(["counts"] * len(wl))
+
     def _perform_measurement_impl(self):
         img = self.camera.acquire_single()
         if img is None:
             raise RuntimeError("Camera returned no image (acquisition failed)")
-        
-        spectrum = np.asarray(img).sum(axis=0)
-        wavelengths = self.kymera.get_calibration_nm()
 
-        if wavelengths.shape[0] != spectrum.shape[0]:
+        spectrum = np.asarray(img).sum(axis=0)
+
+        if spectrum.shape[0] != self.data_columns.shape[0]:
             raise RuntimeError(
-                f"Wavelength axis length ({wavelengths.shape[0]}) does not match "
-                f"spectrum length ({spectrum.shape[0]}) — check binning/ROI vs. "
-                f"spectrograph pixel setup."
+                f"Spectrum length ({spectrum.shape[0]}) does not match "
+                f"data_columns length ({self.data_columns.shape[0]}) — check "
+                f"binning/ROI vs. spectrograph pixel setup, or re-run "
+                f"_initialize_impl after changing grating/center wavelength."
             )
-        
-        return MeasurementResult.of(
-            Stream("spectrum", 
-                    signals=[Signal("intensity", spectrum, "counts")],
-                   coords=[Coordinate("wavelength", wavelengths, "nm")],
-                   display_mode="spectrum")
-        )
-            
+
+        return np.array([spectrum])   # shape (1, N) — N = len(data_columns)
             
     def get_status(self):
         return {
@@ -410,6 +434,12 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
             self.kymera.set_flipper("input", settings["input_port"])
         if "output_port" in settings:
             self.kymera.set_flipper("output", settings["output_port"])
+    
+    def estimate_measure_time(self):
+        try:
+            return float(self.camera.get_exposure())
+        except Exception:
+            return None
 
 
     def _shutdown_impl(self):
