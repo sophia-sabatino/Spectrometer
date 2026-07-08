@@ -413,33 +413,80 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
     def settings(self):
         return {
             "exposure": self.camera.get_exposure(),
+            "trigger_mode": self.camera.get_trigger_mode(),
             "grating": self.kymera.get_grating(),
             "center_wavelength": self.kymera.get_central_wavelength(),
+            "readout_mode": self.camera.get_readout_mode(),
             "temperature_setpoint": self.camera.temperature_setpoint,
             "input_port": self.kymera.get_flipper("input"),
             "output_port": self.kymera.get_flipper("output"),
+            "readout_mode": self.camera.get_readout_mode(),
         }
     
     @settings.setter
     def settings(self, settings):
         if "exposure" in settings:
             self.camera.set_exposure(float(settings["exposure"]))
+        if "trigger_mode" in settings:
+            self.camera.set_trigger_mode(settings["trigger_mode"])
         if "grating" in settings:
             self.kymera.set_grating(settings["grating"])
         if "center_wavelength" in settings:
             self.kymera.set_central_wavelength(float(settings["center_wavelength"]))
+        if "readout_mode" in settings:
+            self.camera.set_readout_mode(settings["readout_mode"])
         if "temperature_setpoint" in settings:
             self.camera.set_temp(float(settings["temperature_setpoint"]))
         if "input_port" in settings:
             self.kymera.set_flipper("input", settings["input_port"])
         if "output_port" in settings:
             self.kymera.set_flipper("output", settings["output_port"])
+        if "readout_mode" in settings:
+            self.camera.set_readout_mode(settings["readout_mode"])
     
     def estimate_measure_time(self):
         try:
             return float(self.camera.get_exposure())
         except Exception:
             return None
+    
+    def configure_readout(
+            self,
+            mode,
+            **kwargs):
+
+        if mode == "fvb":
+
+            self.setup_fvb_mode()
+
+        elif mode == "single_track":
+
+            self.setup_single_track(
+                kwargs["center"],
+                kwargs["width"]
+            )
+
+        elif mode == "multi_track":
+
+            self.setup_multi_track(
+                kwargs["number"],
+                kwargs["height"],
+                kwargs["offset"]
+            )
+
+        elif mode == "image":
+
+            self.setup_image_mode(
+                hstart=kwargs.get("hstart",0),
+                hend=kwargs.get("hend",None),
+                vstart=kwargs.get("vstart",0),
+                vend=kwargs.get("vend",None),
+                hbin=kwargs.get("hbin",1),
+                vbin=kwargs.get("vbin",1),
+            )
+
+        else:
+            raise ValueError(f"Unknown readout mode '{mode}'")
 
 
     def _shutdown_impl(self):
