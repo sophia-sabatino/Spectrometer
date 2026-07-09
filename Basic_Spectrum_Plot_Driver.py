@@ -73,6 +73,9 @@ class AndorCameraController:
             self.cam.set_fan_mode("low")
 
     # Readout / ROI
+    def get_roi(self):
+        return self.cam.get_roi()
+
     def set_roi(self, hbin=1, vbin=1,
                 hstart=0, hend=None,
                 vstart=0, vend=None):
@@ -405,9 +408,11 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
         plt.title("Raw CCD Image")
         plt.show()
 
-        spectrum = np.asarray(img).ravel()
+        spectrum = img.sum(axis = 0)
+        print("Spectrum shape:", spectrum.shape)
 
         wl = self.kymera.get_calibration_nm()
+        print("Wavelength array shape:", wl.shape)
         plt.figure(figsize=(8,5)) 
         plt.plot(wl, spectrum) 
         plt.xlabel("Wavelength (nm)") 
@@ -444,6 +449,7 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
             "input_port": self.kymera.get_flipper("input"),
             "output_port": self.kymera.get_flipper("output"),
             "readout_mode": self.camera.get_readout_mode(),
+            "input_direct_slit_width_um": self.kymera.get_slit_width_um("input_direct"),
             "acquisition_mode": self.camera.acquisition_mode,
             "num_accumulations": self.camera.accum_number,
             "accumulation_cycle_time": self.camera.accum_cycle_time,
