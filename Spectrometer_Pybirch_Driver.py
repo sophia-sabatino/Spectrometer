@@ -31,6 +31,33 @@ settings_schema = {
             "x-ui-unit": "°C", "x-ui-group": "cooling",
         },
     },
+    "acquisition_mode": {
+        "type": "string",
+        "title": "Acquisition Mode",
+        "enum": [
+            "single",
+            "accum"
+        ],
+        "default": "single",
+        "x-ui-group": "acquisition",
+    },
+
+    "num_accumulations": {
+        "type": "integer",
+        "title": "Accumulations",
+        "default": 1,
+        "minimum": 1,
+        "x-ui-group": "acquisition",
+    },
+
+    "accumulation_cycle_time": {
+        "type": "number",
+        "title": "Accumulation Cycle Time",
+        "default": 0.0,
+        "minimum": 0.0,
+        "x-ui-unit": "s",
+        "x-ui-group": "acquisition",
+    },
 }
 
 class AndorCameraController:
@@ -48,6 +75,8 @@ class AndorCameraController:
         self.trigger_mode = "internal"
         self.kinetics_frame = 1
         self.kinetis_cycle_time = None
+        self.accum_number = 1
+        self.accum_cycle_time = 0.0
 
         self._lock = threading.Lock()
 
@@ -206,8 +235,14 @@ class AndorCameraController:
     def get_newest_image(self):
         return self.cam.read_newest_image()
     
-    def setup_accum_mode(self, num_acc, cycle_time_acc=0):
-        self.cam.setup_accum_mode(num_acc, cycle_time_acc)
+    def setup_accum_mode(self, num_acc, cycle_time_acc=0.0):
+        with self._lock:
+            self.cam.set_acquisition_mode("accum")
+            self.cam.setup_accum_mode(num_acc, cycle_time_acc)
+
+            self.acquisition_mode = "accum"
+            self.accum_number = num_acc
+            self.accum_cycle_time = cycle_time_acc
     
     def get_accum_mode_parameters(self):
         return self.cam.get_accum_mode_parameters()
@@ -242,6 +277,15 @@ class AndorCameraController:
             self.cam.wait_for_frame(timeout=timeout)
             image = self.cam.read_newest_image()
             return image
+    
+    def acquire_accum(self):
+        with self._lock:
+
+            self.cam.start_acquisition()
+
+            self.cam.wait_for_frame()
+
+            return self.cam.read_newest_image()
 
 
     def get_status(self):
@@ -255,6 +299,44 @@ class AndorCameraController:
             "acqusition_mode": self.acquisition_mode,
             "trigger_mode": self.trigger_mode,
         }
+    
+    def configure_readout(
+            self,
+            mode,
+            **kwargs):
+
+        if mode == "fvb":
+
+            self.setup_fvb_mode()
+
+        elif mode == "single_track":
+
+            self.setup_single_track(
+                kwargs["center"],
+                kwargs["width"]
+            )
+
+        elif mode == "multi_track":
+
+            self.setup_multi_track(
+                kwargs["number"],
+                kwargs["height"],
+                kwargs["offset"]
+            )
+
+        elif mode == "image":
+
+            self.setup_image_mode(
+                hstart=kwargs.get("hstart",0),
+                hend=kwargs.get("hend",None),
+                vstart=kwargs.get("vstart",0),
+                vend=kwargs.get("vend",None),
+                hbin=kwargs.get("hbin",1),
+                vbin=kwargs.get("vbin",1),
+            )
+
+        else:
+            raise ValueError(f"Unknown readout mode '{mode}'")
 
     # Safety
     def shutdown(self):
@@ -387,11 +469,30 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
         self.data_units = np.array(["counts"] * len(wl))
 
     def _perform_measurement_impl(self):
-        img = self.camera.acquire_single()
+        mode = self.camera.acquisition_mode
+
+        if mode == "single":
+            img = self.camera.acquire_single()
+
+        elif mode == "accum":
+            img = self.camera.acquire_accum()
+
+        else:
+            raise RuntimeError(f"Unsupported acquisition mode: {mode}")
+
         if img is None:
             raise RuntimeError("Camera returned no image (acquisition failed)")
 
         spectrum = np.asarray(img).sum(axis=0)
+
+        wl = self.kymera.get_calibration_nm()
+        plt.figure(figsize=(8,5)) 
+        plt.plot(wl, spectrum) 
+        plt.xlabel("Wavelength (nm)") 
+        plt.ylabel("Counts") 
+        plt.title("Single Acquisition Spectrum") 
+        plt.grid(True) 
+        plt.show()
 
         if spectrum.shape[0] != self.data_columns.shape[0]:
             raise RuntimeError(
@@ -421,6 +522,9 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
             "input_port": self.kymera.get_flipper("input"),
             "output_port": self.kymera.get_flipper("output"),
             "readout_mode": self.camera.get_readout_mode(),
+            "acquisition_mode": self.camera.acquisition_mode,
+            "num_accumulations": self.camera.accum_number,
+            "accumulation_cycle_time": self.camera.accum_cycle_time,
         }
     
     @settings.setter
@@ -443,50 +547,26 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
             self.kymera.set_flipper("output", settings["output_port"])
         if "readout_mode" in settings:
             self.camera.set_readout_mode(settings["readout_mode"])
+        if "acquisition_mode" in settings:
+
+            mode = settings["acquisition_mode"]
+
+            if mode == "single":
+                self.camera.set_acquisition_mode("single")
+
+            elif mode == "accum":
+                self.camera.setup_accum_mode(
+                    num_acc=int(settings.get("num_accumulations", 1)),
+                    cycle_time_acc=float(
+                        settings.get("accumulation_cycle_time", 0.0)
+                    )
+                )
     
     def estimate_measure_time(self):
         try:
             return float(self.camera.get_exposure())
         except Exception:
             return None
-    
-    def configure_readout(
-            self,
-            mode,
-            **kwargs):
-
-        if mode == "fvb":
-
-            self.setup_fvb_mode()
-
-        elif mode == "single_track":
-
-            self.setup_single_track(
-                kwargs["center"],
-                kwargs["width"]
-            )
-
-        elif mode == "multi_track":
-
-            self.setup_multi_track(
-                kwargs["number"],
-                kwargs["height"],
-                kwargs["offset"]
-            )
-
-        elif mode == "image":
-
-            self.setup_image_mode(
-                hstart=kwargs.get("hstart",0),
-                hend=kwargs.get("hend",None),
-                vstart=kwargs.get("vstart",0),
-                vend=kwargs.get("vend",None),
-                hbin=kwargs.get("hbin",1),
-                vbin=kwargs.get("vbin",1),
-            )
-
-        else:
-            raise ValueError(f"Unknown readout mode '{mode}'")
 
 
     def _shutdown_impl(self):
