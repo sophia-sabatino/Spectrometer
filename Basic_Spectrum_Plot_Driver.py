@@ -480,12 +480,9 @@ class AndorCameraController:
 
 
     def acquire_single(self):
-
-        """Blocking single acquisition"""
-
         with self._lock:
-
-            return self.cam.snap()
+            timeout = self.exposure + 1.0
+            return self.cam.snap(timeout=timeout)
 
     
 
