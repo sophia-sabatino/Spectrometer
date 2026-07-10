@@ -483,6 +483,22 @@ class AndorCameraController:
         with self._lock:
             timeout = self.exposure + 1.0
             return self.cam.snap(timeout=timeout)
+    
+    def acquire_accum(self):
+        with self._lock:
+            self.cam.start_acquisition()
+            self.cam.wait_for_frame()
+            return self.cam.read_newest_image()
+    
+    def acquire(self):
+        if self.acquisition_mode == "single":
+            return self.acquire_single()
+        
+        elif self.acquisition_mode == "accum":
+            return self.acquire_accum()
+        
+        else:
+            raise RuntimeError(f"Unsupported acquisition mode: {self.acquisition_mode}")
 
     
 
@@ -501,25 +517,6 @@ class AndorCameraController:
             image = self.cam.read_newest_image()
 
             return image
-
-    
-
-    def acquire_accum(self):
-
-        with self._lock:
-
-
-
-            self.cam.start_acquisition()
-
-
-
-            self.cam.wait_for_frame()
-
-
-
-            return self.cam.read_newest_image()
-
 
 
 
@@ -813,67 +810,26 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
 
 
     def _perform_measurement_impl(self):
-
-        mode = self.camera.acquisition_mode
-
-
-
-        """if mode == "single":
-
-            img = self.camera.acquire_single()
-
-
-
-        elif mode == "accum":
-
-            img = self.camera.acquire_accum()
-
-
-
-        else:
-
-            raise RuntimeError(f"Unsupported acquisition mode: {mode}")
-
-
-
-        if img is None:
-
-            raise RuntimeError("Camera returned no image (acquisition failed)")"""
-
-        
-
-        img = np.asarray(self.camera.acquire_single())
+        img = np.asarray(self.camera.acquire())
         img = img[:, ::-1]
 
 
 
-        print("Shape:", img.shape)
-
+        """print("Shape:", img.shape)
         print("dtype:", img.dtype)
-
         print("Min:", img.min())
-
         print("Max:", img.max())
-
         print("Mean:", img.mean())
 
-
-
         plt.figure()
-
         plt.imshow(img, aspect="auto", origin="lower")
-
         plt.colorbar(label="Counts")
-
         plt.title("Raw CCD Image")
-
-        plt.show()
-
-
+        plt.show()"""
 
         spectrum = img.sum(axis = 0)
    
-        print("Spectrum shape:", spectrum.shape)
+        """print("Spectrum shape:", spectrum.shape)
 
 
 
@@ -898,7 +854,7 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
 
         plt.grid(True) 
 
-        plt.show()
+        plt.show()"""
 
 
 
@@ -1033,44 +989,37 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
             self.kymera.set_detector_offset(settings["detector_offset"])
 
         if "acquisition_mode" in settings:
+            self.camera.acquisition_mode = settings["acquisition_mode"]
 
+        if "num_accumulations" in settings:
+            self.camera.accum_number = int(settings["num_accumulations"])
 
-
-            mode = settings["acquisition_mode"]
-
-
-
-            if mode == "single":
-
-                self.camera.set_acquisition_mode("single")
-
-
-
-            elif mode == "accum":
-
-                self.camera.setup_accum_mode(
-
-                    num_acc=int(settings.get("num_accumulations", 1)),
-
-                    cycle_time_acc=float(
-
-                        settings.get("accumulation_cycle_time", 0.0)
-
-                    )
-
-                )
+        if "accumulation_cycle_time" in settings:
+            self.camera.accum_cycle_time = float(
+                settings["accumulation_cycle_time"]
+            )
+        
+        if self.camera.acquisition_mode == "accum":
+            self.camera.setup_accum_mode(
+                num_acc=self.camera.accum_number,
+                cycle_time_acc=self.camera.accum_cycle_time,
+            )
+        elif self.camera.acquisition_mode == "single":
+            self.camera.set_acquisition_mode("single")
 
     
 
     def estimate_measure_time(self):
 
-        try:
+        if self.camera.acquisition_mode == "single":
+            return self.camera.exposure
 
-            return float(self.camera.get_exposure())
-
-        except Exception:
-
-            return None
+        elif self.camera.acquisition_mode == "accum":
+            return (
+                self.camera.exposure * self.camera.accum_number
+                + self.camera.accum_cycle_time *
+                max(self.camera.accum_number - 1, 0)
+            )
 
 
 
