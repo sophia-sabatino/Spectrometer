@@ -475,7 +475,7 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
 
         spectrum = img.sum(axis = 0)
    
-        """print("Spectrum shape:", spectrum.shape)
+        print("Spectrum shape:", spectrum.shape)
 
 
 
@@ -500,7 +500,7 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
 
         plt.grid(True) 
 
-        plt.show()"""
+        plt.show()
 
 
         if spectrum.shape[0] != self.data_columns.shape[0]:
