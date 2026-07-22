@@ -487,10 +487,31 @@ class AndorCameraController:
                 #f"hardware_exposure={actual_exposure}, timeout={timeout}")
             return self.cam.snap(timeout=timeout)
     
+    def _expected_accum_duration(self):
+        exposure = self.cam.get_exposure()   # hardware readback, not self.exposure
+        return (
+            exposure * self.accum_number
+            + self.accum_cycle_time * max(self.accum_number - 1, 0)
+        )
+
     def acquire_accum(self):
         with self._lock:
+            try:
+                self.cam.stop_acquisition()
+            except Exception:
+                pass
+
+            # Explicitly (re-)apply accum parameters right before arming,
+            # rather than trusting an earlier settings call is still in effect
+            self.cam.set_acquisition_mode("accum")
+            self.cam.setup_accum_mode(self.accum_number, self.accum_cycle_time)
+
+            timeout = self._expected_accum_duration() + 5.0
+            print("accum: starting acquisition", timeout)
             self.cam.start_acquisition()
-            self.cam.wait_for_frame()
+            print("accum: waiting for frame")
+            self.cam.wait_for_frame(timeout=timeout)
+            print("accum: reading frame")
             return self.cam.read_newest_image()
     
     def acquire(self):
@@ -813,6 +834,7 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
 
 
     def _perform_measurement_impl(self):
+        print(self.camera.get_acquisition_mode())
         img = np.asarray(self.camera.acquire())
         img = img[:, ::-1]
 
@@ -1000,13 +1022,19 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
             )
         
         if "acquisition_mode" in settings:
-            if self.camera.acquisition_mode == "accum":
+            new_mode = settings["acquisition_mode"]
+            if new_mode not in ("single", "accum"):
+                raise ValueError(f"Unsupported acquisition_mode: {new_mode!r}")
+
+            if new_mode == "accum":
                 self.camera.setup_accum_mode(
                     num_acc=self.camera.accum_number,
                     cycle_time_acc=self.camera.accum_cycle_time,
                 )
-            elif self.camera.acquisition_mode == "single":
+                # setup_accum_mode already sets self.camera.acquisition_mode = "accum"
+            elif new_mode == "single":
                 self.camera.set_acquisition_mode("single")
+                # set_acquisition_mode already sets self.camera.acquisition_mode = "single"
 
     
 
@@ -1016,11 +1044,7 @@ class AndorSpectrometerDriver(BaseMeasurementInstrument):
             return self.camera.exposure
 
         elif self.camera.acquisition_mode == "accum":
-            return (
-                self.camera.exposure * self.camera.accum_number
-                + self.camera.accum_cycle_time *
-                max(self.camera.accum_number - 1, 0)
-            )
+            return self.camera._expected_accum_duration()
 
 
 
