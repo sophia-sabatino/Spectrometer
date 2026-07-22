@@ -518,7 +518,10 @@ class AndorCameraController:
         with self._lock:
 
             try:
+                print("stopping acquisition")
+                self.cam.stop_acquisition()
                 self.cam.clear_acquisition()
+                print("acquisition cleared")
             except Exception:
                 pass
 
@@ -527,7 +530,11 @@ class AndorCameraController:
             timeout = self._expected_accum_duration() + 15.0
             print("Waiting", timeout)
             print("Parameters:", self.cam.get_accum_mode_parameters())
-
+            success = self.cam.wait_for_frame(
+                timeout=timeout,
+                error_on_stopped=True
+            )
+            print(success)
             self.cam.wait_for_frame(timeout=timeout)
             print("reading frame")
             image = self.cam.read_newest_image()
