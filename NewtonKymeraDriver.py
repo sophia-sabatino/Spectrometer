@@ -7,10 +7,12 @@ pll.par["devices/dlls/andor_shamrock"] = r"C:\Program Files\Andor SOLIS"
 from pylablib.devices import Andor
 from pybirch.Instruments.base import BaseMeasurementInstrument
 import time
+import threading
 
 class NewtonKymeraDriver(BaseMeasurementInstrument):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._hardware_lock = threading.RLock()
 
         self.cam = None
         self.spec = None
@@ -82,7 +84,6 @@ class NewtonKymeraDriver(BaseMeasurementInstrument):
 
         # Full vertical binning produces one spectrum row.
         self.cam.set_read_mode("fvb")
-        self._configure_acquisition_mode()
 
         print("Fan mode:", self.cam.get_fan_mode())
         print("Cooler enabled:", self.cam.is_cooler_on())
@@ -193,19 +194,14 @@ class NewtonKymeraDriver(BaseMeasurementInstrument):
         return max(exposure + 5.0, 10.0)
 
     def _configure_acquisition_mode(self):
-        if self.cam is None:
-            return
-
         if self._acquisition_mode not in ("single", "accum"):
             raise ValueError(
                 "Acquisition mode must be 'single' or 'accum'"
             )
 
-        # Hardware always stays in the known-working single-frame mode.
-        self.cam.set_acquisition_mode("single")
-
+        # This method now only validates/reports the logical PyBirch mode.
+        # It does not reconfigure the camera.
         print("PyBirch logical mode:", self._acquisition_mode)
-        print("Camera hardware mode:", self.cam.get_acquisition_mode())
         print(
             "Software accumulation frames:",
             1 if self._acquisition_mode == "single"
@@ -216,24 +212,24 @@ class NewtonKymeraDriver(BaseMeasurementInstrument):
         if self.cam is None:
             raise RuntimeError("Camera is not connected")
 
-        # Keep every individual acquisition in the known-working mode.
-        self.cam.set_acquisition_mode("single")
+        with self._hardware_lock:
+            exposure = float(self.cam.get_exposure())
+            timeout = max(exposure + 5.0, 10.0)
 
-        exposure = float(self.cam.get_exposure())
-        timeout = max(exposure + 5.0, 10.0)
+            print(
+                f"Calling snap: exposure={exposure:.4f} s, "
+                f"timeout={timeout:.2f} s"
+            )
 
-        return np.asarray(
-            self.cam.snap(timeout=timeout),
-            dtype=np.float64,
-        )
+            frame = self.cam.snap(timeout=timeout)
+
+            return np.asarray(frame, dtype=np.float64)
 
     def _acquire_raw(self):
         if self._acquisition_mode == "single":
             num_frames = 1
-
         elif self._acquisition_mode == "accum":
             num_frames = int(self._num_accumulations)
-
         else:
             raise RuntimeError(
                 f"Unsupported acquisition mode: "
@@ -245,48 +241,49 @@ class NewtonKymeraDriver(BaseMeasurementInstrument):
                 "Number of accumulation frames must be at least 1"
             )
 
-        accumulated = None
+        with self._hardware_lock:
+            accumulated = None
 
-        for index in range(num_frames):
-            frame = self._acquire_one_raw()
+            for index in range(num_frames):
+                exposure = float(self.cam.get_exposure())
+                timeout = max(exposure + 5.0, 10.0)
 
-            if accumulated is None:
-                accumulated = np.zeros_like(
-                    frame,
+                frame = np.asarray(
+                    self.cam.snap(timeout=timeout),
                     dtype=np.float64,
                 )
 
-            if frame.shape != accumulated.shape:
-                raise RuntimeError(
-                    "Frame shape changed during accumulation: "
-                    f"expected {accumulated.shape}, got {frame.shape}"
+                if accumulated is None:
+                    accumulated = np.zeros_like(
+                        frame,
+                        dtype=np.float64,
+                    )
+
+                if frame.shape != accumulated.shape:
+                    raise RuntimeError(
+                        "Frame shape changed during accumulation: "
+                        f"expected {accumulated.shape}, "
+                        f"got {frame.shape}"
+                    )
+
+                accumulated += frame
+
+                print(
+                    f"Acquired frame {index + 1}/{num_frames}: "
+                    f"min={frame.min():.1f}, "
+                    f"max={frame.max():.1f}, "
+                    f"mean={frame.mean():.1f}"
                 )
 
-            accumulated += frame
+                if (
+                    index < num_frames - 1
+                    and self._accumulation_cycle_time > 0
+                ):
+                    time.sleep(
+                        self._accumulation_cycle_time
+                    )
 
-            print(
-                f"Acquired frame {index + 1}/{num_frames}: "
-                f"min={frame.min():.1f}, "
-                f"max={frame.max():.1f}, "
-                f"mean={frame.mean():.1f}"
-            )
-
-            # Optional delay between completed snapshots.
-            if (
-                index < num_frames - 1
-                and self._accumulation_cycle_time > 0
-            ):
-                time.sleep(self._accumulation_cycle_time)
-
-        print(
-            "Accumulated result:",
-            f"frames={num_frames},",
-            f"min={accumulated.min():.1f},",
-            f"max={accumulated.max():.1f},",
-            f"mean={accumulated.mean():.1f}",
-        )
-
-        return accumulated
+            return accumulated
 
     def _perform_measurement_impl(self):
         if self.cam is None or self.spec is None:
@@ -339,15 +336,22 @@ class NewtonKymeraDriver(BaseMeasurementInstrument):
         }
 
         if self.cam is not None:
-            values["exposure"] = float(self.cam.get_exposure())
-            values["readout_mode"] = self.cam.get_read_mode()
-            values["current_temperature"] = float(
-                self.cam.get_temperature()
-            )
-            values["cooler_enabled"] = bool(
-                self.cam.is_cooler_on()
-            )
-            values["fan_mode"] = self.cam.get_fan_mode()
+            with self._hardware_lock:
+                values["exposure"] = float(
+                    self.cam.get_exposure()
+                )
+                values["readout_mode"] = (
+                    self.cam.get_read_mode()
+                )
+                values["current_temperature"] = float(
+                    self.cam.get_temperature()
+                )
+                values["cooler_enabled"] = bool(
+                    self.cam.is_cooler_on()
+                )
+                values["fan_mode"] = (
+                    self.cam.get_fan_mode()
+                )
 
             # Do not do this:
             # values["acquisition_mode"] = self.cam.get_acquisition_mode()
@@ -367,143 +371,158 @@ class NewtonKymeraDriver(BaseMeasurementInstrument):
 
         calibration_changed = False
 
-        if "exposure" in values:
-            exposure = float(values["exposure"])
+        with self._hardware_lock:
+            # -------------------------------------------------------------
+            # Exposure
+            # -------------------------------------------------------------
+            if "exposure" in values:
+                exposure = float(values["exposure"])
 
-            if exposure <= 0:
-                raise ValueError("Exposure must be greater than zero")
+                if exposure <= 0:
+                    raise ValueError(
+                        "Exposure must be greater than zero"
+                    )
 
-            self._exposure = exposure
+                if exposure != self._exposure:
+                    self._exposure = exposure
 
-            if self.cam is not None:
-                self.cam.set_exposure(exposure)
+                    if self.cam is not None:
+                        self.cam.set_exposure(exposure)
 
-        if "readout_mode" in values:
-            mode = str(values["readout_mode"])
+                        actual = float(self.cam.get_exposure())
+                        print(
+                            "Exposure changed:",
+                            f"requested={exposure}, actual={actual}"
+                        )
 
-            if mode not in ("fvb", "image"):
-                raise ValueError(
-                    "Readout mode must be 'fvb' or 'image'"
+            # -------------------------------------------------------------
+            # Readout
+            # -------------------------------------------------------------
+            if "readout_mode" in values:
+                mode = str(values["readout_mode"])
+
+                if mode not in ("fvb", "image"):
+                    raise ValueError(
+                        "Readout mode must be 'fvb' or 'image'"
+                    )
+
+                if mode != self._readout_mode:
+                    self._readout_mode = mode
+
+                    if self.cam is not None:
+                        self.cam.set_read_mode(mode)
+
+                    calibration_changed = True
+
+            # -------------------------------------------------------------
+            # Cooling
+            # -------------------------------------------------------------
+            if "temperature_setpoint" in values:
+                temperature = float(values["temperature_setpoint"])
+
+                if temperature != self._temperature_setpoint:
+                    self._temperature_setpoint = temperature
+
+                    if self.cam is not None:
+                        self.cam.set_temperature(
+                            temperature,
+                            enable_cooler=self._cooler_enabled,
+                        )
+
+            if "cooler_enabled" in values:
+                enabled = bool(values["cooler_enabled"])
+
+                if enabled != self._cooler_enabled:
+                    self._cooler_enabled = enabled
+
+                    if self.cam is not None:
+                        self.cam.set_cooler(enabled)
+
+            if "fan_mode" in values:
+                mode = str(values["fan_mode"])
+
+                if mode not in ("full", "low", "off"):
+                    raise ValueError(
+                        "Fan mode must be 'full', 'low', or 'off'"
+                    )
+
+                if mode != self._fan_mode:
+                    self._fan_mode = mode
+
+                    if self.cam is not None:
+                        self.cam.set_fan_mode(mode)
+
+            # -------------------------------------------------------------
+            # Spectrograph
+            # -------------------------------------------------------------
+            if "grating" in values:
+                grating = int(values["grating"])
+
+                if grating != self._grating:
+                    self._grating = grating
+
+                    if self.spec is not None:
+                        self.spec.set_grating(grating)
+
+                    calibration_changed = True
+
+            if "center_wavelength" in values:
+                wavelength_nm = float(values["center_wavelength"])
+
+                if wavelength_nm <= 0:
+                    raise ValueError(
+                        "Center wavelength must be greater than zero"
+                    )
+
+                if wavelength_nm != self._center_wavelength_nm:
+                    self._center_wavelength_nm = wavelength_nm
+
+                    if self.spec is not None:
+                        self.spec.set_wavelength(
+                            wavelength_nm * 1e-9
+                        )
+
+                    calibration_changed = True
+
+            # -------------------------------------------------------------
+            # Logical software accumulation
+            # -------------------------------------------------------------
+            if "acquisition_mode" in values:
+                mode = str(values["acquisition_mode"])
+
+                if mode not in ("single", "accum"):
+                    raise ValueError(
+                        "Acquisition mode must be 'single' or 'accum'"
+                    )
+
+                self._acquisition_mode = mode
+
+            if "num_accumulations" in values:
+                num_acc = int(values["num_accumulations"])
+
+                if num_acc < 1:
+                    raise ValueError(
+                        "Number of accumulations must be at least 1"
+                    )
+
+                self._num_accumulations = num_acc
+
+            if "accumulation_cycle_time" in values:
+                cycle_time = float(
+                    values["accumulation_cycle_time"]
                 )
 
-            self._readout_mode = mode
+                if cycle_time < 0:
+                    raise ValueError(
+                        "Accumulation cycle time cannot be negative"
+                    )
 
-            if self.cam is not None:
-                self.cam.set_read_mode(mode)
-                calibration_changed = True
+                self._accumulation_cycle_time = cycle_time
 
-        if "temperature_setpoint" in values:
-            temperature = float(values["temperature_setpoint"])
-            self._temperature_setpoint = temperature
+            if calibration_changed:
+                self._update_calibration()
 
-            if self.cam is not None:
-                self.cam.set_temperature(
-                    temperature,
-                    enable_cooler=self._cooler_enabled,
-                )
-
-        if "cooler_enabled" in values:
-            enabled = bool(values["cooler_enabled"])
-            self._cooler_enabled = enabled
-
-            if self.cam is not None:
-                self.cam.set_cooler(enabled)
-
-        if "fan_mode" in values:
-            mode = str(values["fan_mode"])
-
-            if mode not in ("full", "low", "off"):
-                raise ValueError(
-                    "Fan mode must be 'full', 'low', or 'off'"
-                )
-
-            self._fan_mode = mode
-
-            if self.cam is not None:
-                self.cam.set_fan_mode(mode)
-
-        if "grating" in values:
-            grating = int(values["grating"])
-            self._grating = grating
-
-            if self.spec is not None:
-                self.spec.set_grating(grating)
-                calibration_changed = True
-
-        if "center_wavelength" in values:
-            wavelength_nm = float(values["center_wavelength"])
-
-            if wavelength_nm <= 0:
-                raise ValueError(
-                    "Center wavelength must be greater than zero"
-                )
-
-            self._center_wavelength_nm = wavelength_nm
-
-            if self.spec is not None:
-                self.spec.set_wavelength(
-                    wavelength_nm * 1e-9
-                )
-                calibration_changed = True
-
-        if calibration_changed:
-            self._update_calibration()
-
-        acquisition_changed = False
-
-        if "acquisition_mode" in values:
-            mode = str(values["acquisition_mode"])
-
-            if mode not in ("single", "accum"):
-                raise ValueError(
-                    "Acquisition mode must be 'single' or 'accum'"
-                )
-
-            self._acquisition_mode = mode
-            acquisition_changed = True
-
-        if "num_accumulations" in values:
-            num_acc = int(values["num_accumulations"])
-
-            if num_acc < 1:
-                raise ValueError(
-                    "Number of accumulations must be at least 1"
-                )
-
-            self._num_accumulations = num_acc
-            acquisition_changed = True
-
-        if "accumulation_cycle_time" in values:
-            cycle_time = float(
-                values["accumulation_cycle_time"]
-            )
-
-            if cycle_time < 0:
-                raise ValueError(
-                    "Accumulation cycle time cannot be negative"
-                )
-
-            self._accumulation_cycle_time = cycle_time
-            acquisition_changed = True
-
-        # Exposure also affects valid accumulation timing.
-        if "exposure" in values:
-            exposure = float(values["exposure"])
-
-            if exposure <= 0:
-                raise ValueError(
-                    "Exposure must be greater than zero"
-                )
-
-            self._exposure = exposure
-
-            if self.cam is not None:
-                self.cam.set_exposure(exposure)
-
-            acquisition_changed = True
-
-        if acquisition_changed and self.cam is not None:
-            self._configure_acquisition_mode()
+        self._configure_acquisition_mode()
 
     def get_status(self):
         if self.cam is None:
@@ -515,24 +534,26 @@ class NewtonKymeraDriver(BaseMeasurementInstrument):
                 "fan_mode": None,
             }
 
-        return {
-            "connected": True,
-            "temperature": self.cam.get_temperature(),
-            "temperature_status": self.cam.get_temperature_status(),
-            "cooler": self.cam.is_cooler_on(),
-            "fan_mode": self.cam.get_fan_mode(),
-            "grating": (
-                self.spec.get_grating()
-                if self.spec is not None
-                else None
-            ),
-            "center_wavelength_nm": (
-                self.spec.get_wavelength() * 1e9
-                if self.spec is not None
-                else None
-            ),
-        }
-
+        with self._hardware_lock:
+            return {
+                "connected": True,
+                "temperature": self.cam.get_temperature(),
+                "temperature_status":
+                    self.cam.get_temperature_status(),
+                "cooler": self.cam.is_cooler_on(),
+                "fan_mode": self.cam.get_fan_mode(),
+                "grating": (
+                    self.spec.get_grating()
+                    if self.spec is not None
+                    else None
+                ),
+                "center_wavelength_nm": (
+                    self.spec.get_wavelength() * 1e9
+                    if self.spec is not None
+                    else None
+                ),
+            }
+        
     def estimate_measure_time(self):
         exposure = self._exposure
 
