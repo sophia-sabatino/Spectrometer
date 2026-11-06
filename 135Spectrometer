@@ -1,0 +1,632 @@
+from __future__ import annotations
+
+import logging
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pylablib as pll
+from pylablib.devices import Andor
+
+from pybirch.Instruments.base import BaseMeasurementInstrument
+from pybirch.Instruments.result import Coordinate, MeasurementResult, Signal, Stream
+from pybirch.Instruments.setting_field import Setting
+
+
+LOG = logging.getLogger(__name__)
+
+ANDOR_RUNTIME_DIR = Path(r"C:\Program Files\Andor SOLIS")
+EXPECTED_CAMERA_MODEL = "DU920P_BVF"
+EXPECTED_CAMERA_SERIAL = 22996
+EXPECTED_SPECTRUM_PIXELS = 1024
+MAX_EXPOSURE_S = 1800.0
+DEFAULT_CCD_SETPOINT_C = -85.0
+DEFAULT_FAN_MODE = "full"
+
+# Leave this empty until the first guided commissioning run records the Kymera
+# serial.  Exactly one spectrograph is still required even while it is empty.
+EXPECTED_SPECTROGRAPH_SERIAL = ""
+
+pll.par["devices/dlls/andor_sdk2"] = str(ANDOR_RUNTIME_DIR)
+pll.par["devices/dlls/andor_shamrock"] = str(ANDOR_RUNTIME_DIR)
+
+
+def _validate_andor_installation() -> None:
+    """Fail before SDK enumeration when the required 64-bit DLLs are absent."""
+
+    camera_dlls = (
+        ANDOR_RUNTIME_DIR / "atmcd64d_legacy.dll",
+        ANDOR_RUNTIME_DIR / "atmcd64d.dll",
+    )
+    spectrograph_dll = ANDOR_RUNTIME_DIR / "atspectrograph.dll"
+    if not any(path.is_file() for path in camera_dlls):
+        raise RuntimeError(
+            "Andor SDK2 camera DLL not found in "
+            f"{ANDOR_RUNTIME_DIR}. Repair the Andor Solis/SDK installation."
+        )
+    if not spectrograph_dll.is_file():
+        raise RuntimeError(
+            "Andor spectrograph DLL not found at "
+            f"{spectrograph_dll}. Repair the Andor Solis/SDK installation."
+        )
+
+
+def _field(value: Any, name: str, index: int) -> Any:
+    """Read a named-tuple field with a tuple fallback for test doubles."""
+
+    if hasattr(value, name):
+        return getattr(value, name)
+    return value[index]
+
+
+class NewtonKymera328iDriver(BaseMeasurementInstrument):
+    """Andor Newton DU920P_BVF plus one Kymera/Shamrock spectrograph.
+
+    Safety boundaries:
+
+    * zero or multiple cameras fail before a camera is opened;
+    * the camera model and serial are verified before spectrograph access;
+    * zero or multiple spectrographs fail closed;
+    * cooling remains off until the approved camera and spectrograph validate;
+    * after validation, -85 degC cooling is explicitly enabled with full fan;
+    * every partial connection failure closes all handles;
+    * no operation is retried automatically.
+    """
+
+    # This read-only diagnostic is intentionally the only driver-specific
+    # method needed outside normal Measurement Station acquisition.
+    available_methods = ["get_temperature_status"]
+
+    exposure_s = Setting(
+        1.0,
+        step=0.1,
+        unit="s",
+        title="Exposure time",
+        section="Acquisition",
+        description="Single-frame Newton exposure. Use PyBirch average=N for repeated frames.",
+    )
+    center_wavelength_nm = Setting(
+        532.0,
+        step=0.1,
+        unit="nm",
+        title="Center wavelength",
+        section="Spectrograph",
+        description="Requested Kymera center wavelength for the selected grating.",
+    )
+    grating = Setting(
+        2,
+        step=1,
+        title="Grating",
+        section="Spectrograph",
+        description="One-based Kymera grating index. Changing it moves the grating turret.",
+    )
+    cooler_enabled = Setting(
+        True,
+        title="Cooler enabled",
+        section="Temperature",
+        description="Enabled after the Newton/Kymera identity and connection checks pass.",
+    )
+    temperature_setpoint_c = Setting(
+        -85.0,
+        step=1.0,
+        unit="degC",
+        title="Temperature setpoint",
+        section="Temperature",
+        description="Setpoint only; changing it does not implicitly enable the cooler.",
+    )
+    fan_mode = Setting(
+        "full",
+        enum=["off", "low", "full"],
+        title="Fan mode",
+        section="Temperature",
+        description="Full fan is used for the default -85 degC cooling request.",
+    )
+
+    settings_max_age_s = 300.0
+    # --- I3d DECLARATION OVERLAY (81_NewtonKymera328iDriver.py) ---
+    DECLARED_STREAMS = (
+        StreamSpec(
+            'spectrum',
+            signals=[{'name': 'intensity', 'unit': 'counts'}],
+            coords=[{'name': 'wavelength', 'unit': 'nm'}],
+        ),
+    )
+
+    def __init__(self, name: str = "Andor Newton/Kymera"):
+        super().__init__(name)
+        self._hardware_lock = threading.RLock()
+        self.cam = None
+        self.spec = None
+        self._identity_validated = False
+        self._camera_identity: dict[str, Any] = {}
+        self._spectrograph_serial = ""
+        self._detector_size: tuple[int, int] | None = None
+        self._pixel_size_m: tuple[float, float] | None = None
+        self._wavelength_nm = np.array([], dtype=float)
+        self._acquisition_fault: str | None = None
+
+        # A CCD acquisition is expensive and can make audible readout noise.
+        # Keep automatic Agent polling infrequent; Measurement Station scans
+        # take direct ownership when they need spectra. Agent liveness uses a
+        # separate heartbeat and does not depend on frequent CCD exposures.
+        self.min_poll_interval = 600.0
+
+    # ------------------------------------------------------------------
+    # Connection and cleanup
+    # ------------------------------------------------------------------
+
+    def _connect_impl(self) -> bool:
+        with self._hardware_lock:
+            self._close_hardware()
+            try:
+                _validate_andor_installation()
+
+                camera_count = int(Andor.get_cameras_number_SDK2())
+                if camera_count != 1:
+                    raise RuntimeError(
+                        "Safety gate: expected exactly one Andor SDK2 camera, "
+                        f"but found {camera_count}. No camera was opened."
+                    )
+
+                # temperature=None would enable the cooler in PyLabLib.  The
+                # explicit "off" startup is therefore safety-critical.
+                self.cam = Andor.AndorSDK2Camera(
+                    idx=0,
+                    temperature="off",
+                    fan_mode="off",
+                )
+                self._validate_camera_identity()
+
+                spectrograph_serials = [str(value) for value in Andor.list_shamrock_spectrographs()]
+                if len(spectrograph_serials) != 1:
+                    raise RuntimeError(
+                        "Safety gate: expected exactly one Kymera/Shamrock spectrograph after "
+                        f"opening the Newton, but found {len(spectrograph_serials)} "
+                        f"({spectrograph_serials})."
+                    )
+                if EXPECTED_SPECTROGRAPH_SERIAL and spectrograph_serials[0] != EXPECTED_SPECTROGRAPH_SERIAL:
+                    raise RuntimeError(
+                        "Safety gate: spectrograph serial mismatch. Expected "
+                        f"{EXPECTED_SPECTROGRAPH_SERIAL}, found {spectrograph_serials[0]}."
+                    )
+
+                self.spec = Andor.ShamrockSpectrograph(idx=0)
+                spec_info = self.spec.get_device_info()
+                self._spectrograph_serial = str(_field(spec_info, "serial_number", 0))
+                if self._spectrograph_serial != spectrograph_serials[0]:
+                    raise RuntimeError(
+                        "Spectrograph enumeration changed during connection: "
+                        f"listed {spectrograph_serials[0]}, opened {self._spectrograph_serial}."
+                    )
+
+                self._configure_fixed_camera_mode()
+                self._update_calibration()
+                self._enable_default_cooling()
+
+                LOG.info(
+                    "Validated Newton %s serial %s with spectrograph serial %s; "
+                    "calibration has %d pixels",
+                    EXPECTED_CAMERA_MODEL,
+                    EXPECTED_CAMERA_SERIAL,
+                    self._spectrograph_serial,
+                    self._wavelength_nm.size,
+                )
+                self._acquisition_fault = None
+                return True
+            except Exception:
+                self._close_hardware()
+                raise
+
+    def _validate_camera_identity(self) -> None:
+        info = self.cam.get_device_info()
+        controller_model = str(_field(info, "controller_model", 0))
+        head_model = str(_field(info, "head_model", 1))
+        serial_number = int(_field(info, "serial_number", 2))
+        self._camera_identity = {
+            "controller_model": controller_model,
+            "head_model": head_model,
+            "serial_number": serial_number,
+        }
+        if head_model != EXPECTED_CAMERA_MODEL or serial_number != EXPECTED_CAMERA_SERIAL:
+            raise RuntimeError(
+                "Safety gate: wrong Andor camera. Expected "
+                f"{EXPECTED_CAMERA_MODEL} serial {EXPECTED_CAMERA_SERIAL}; found "
+                f"{head_model} serial {serial_number}."
+            )
+        self._identity_validated = True
+
+    def _configure_fixed_camera_mode(self) -> None:
+        self._require_camera_identity()
+        self._detector_size = tuple(int(v) for v in self.cam.get_detector_size())
+        if len(self._detector_size) != 2 or self._detector_size[0] != EXPECTED_SPECTRUM_PIXELS:
+            raise RuntimeError(
+                "Unexpected Newton detector geometry: "
+                f"{self._detector_size}; expected {EXPECTED_SPECTRUM_PIXELS} horizontal pixels."
+            )
+        self._pixel_size_m = tuple(float(v) for v in self.cam.get_pixel_size())
+
+        self.cam.set_read_mode("fvb")
+        self.cam.set_trigger_mode("int")
+        self.cam.set_acquisition_mode("single")
+        self.cam.set_exposure(float(self._exposure_s))
+
+        # Keep the local settings snapshot truthful for values this method has
+        # just applied. Cooling/fan remain off until _enable_default_cooling().
+        self._set_auto_settings(
+            {
+                "exposure_s": float(self.cam.get_exposure()),
+                "cooler_enabled": bool(self.cam.is_cooler_on()),
+                "fan_mode": str(self.cam.get_fan_mode()),
+            }
+        )
+
+    def _enable_default_cooling(self) -> None:
+        """Enable deep cooling only after the full connection has validated.
+
+        The order is deliberate: validate the requested setpoint against the
+        camera-reported range, program it without implicitly switching the
+        cooler, start the heat-removal fan, and only then enable the cooler.
+        A failed cooler confirmation fails the connection and releases both SDK
+        handles instead of leaving PyBirch reporting a ready but warm camera.
+        """
+
+        self._require_ready()
+        lower_c, upper_c = (float(v) for v in self.cam.get_temperature_range())
+        if not lower_c <= DEFAULT_CCD_SETPOINT_C <= upper_c:
+            raise RuntimeError(
+                "The approved CCD setpoint is outside the camera-reported range: "
+                f"requested {DEFAULT_CCD_SETPOINT_C:g} degC, range "
+                f"{lower_c:g} to {upper_c:g} degC."
+            )
+
+        self.cam.set_temperature(DEFAULT_CCD_SETPOINT_C, enable_cooler=False)
+        self.cam.set_fan_mode(DEFAULT_FAN_MODE)
+        self.cam.set_cooler(True)
+        if not self.cam.is_cooler_on():
+            raise RuntimeError("Newton cooler did not report ON after the validated startup request")
+
+        applied = {
+            "temperature_setpoint_c": float(self.cam.get_temperature_setpoint()),
+            "cooler_enabled": True,
+            "fan_mode": str(self.cam.get_fan_mode()),
+        }
+        self._set_auto_settings(applied)
+        self._merge_settings_cache(applied)
+
+    def _close_hardware(self) -> None:
+        """Release SDK resources in spectrograph-then-camera order."""
+
+        spec, cam = self.spec, self.cam
+        self.spec = None
+        self.cam = None
+        self._identity_validated = False
+        self._wavelength_nm = np.array([], dtype=float)
+
+        if spec is not None:
+            try:
+                spec.close()
+            except Exception:
+                LOG.exception("Error while closing the Kymera spectrograph")
+        if cam is not None:
+            try:
+                cam.clear_acquisition()
+            except Exception:
+                LOG.debug("Could not clear Newton acquisition during cleanup", exc_info=True)
+            try:
+                cam.close()
+            except Exception:
+                LOG.exception("Error while closing the Newton camera")
+
+    def _shutdown_impl(self) -> None:
+        with self._hardware_lock:
+            self._close_hardware()
+
+    def _emergency_stop_impl(self) -> None:
+        """Abort acquisition and release handles; never retry automatically."""
+
+        with self._hardware_lock:
+            self._close_hardware()
+            self.status = False
+
+    # ------------------------------------------------------------------
+    # Settings contract
+    # ------------------------------------------------------------------
+
+    def _read_settings_impl(self, progress=None) -> dict:
+        """Read hardware only during an explicit/agent-scheduled refresh."""
+
+        with self._hardware_lock:
+            self._require_ready()
+            steps = (
+                ("exposure_s", lambda: float(self.cam.get_exposure())),
+                ("center_wavelength_nm", lambda: float(self.spec.get_wavelength()) * 1e9),
+                ("grating", lambda: int(self.spec.get_grating())),
+                ("cooler_enabled", lambda: bool(self.cam.is_cooler_on())),
+                ("temperature_setpoint_c", lambda: float(self.cam.get_temperature_setpoint())),
+                ("fan_mode", lambda: str(self.cam.get_fan_mode())),
+            )
+            values: dict[str, Any] = {}
+            for done, (key, read) in enumerate(steps, start=1):
+                values[key] = read()
+                if progress:
+                    progress(done, len(steps), key)
+            return values
+
+    @BaseMeasurementInstrument.settings.setter
+    def settings(self, requested: dict) -> None:
+        if not isinstance(requested, dict):
+            raise TypeError("settings must be a dictionary")
+        unknown = set(requested) - set(self._settings_keys)
+        if unknown:
+            raise ValueError(f"Unknown Newton/Kymera setting(s): {sorted(unknown)}")
+
+        with self._hardware_lock:
+            self._require_ready()
+            values = self._validate_settings_request(requested)
+            applied: dict[str, Any] = {}
+            calibration_changed = False
+            try:
+                if "exposure_s" in values:
+                    self.cam.set_exposure(values["exposure_s"])
+                    applied["exposure_s"] = float(self.cam.get_exposure())
+
+                # Spectrograph movement happens before any request to enable
+                # cooling. If movement sounds abnormal, use Emergency Stop and
+                # do not continue with thermal changes.
+                if "grating" in values:
+                    self.spec.set_grating(values["grating"])
+                    applied["grating"] = int(self.spec.get_grating())
+                    calibration_changed = True
+                if "center_wavelength_nm" in values:
+                    self.spec.set_wavelength(values["center_wavelength_nm"] * 1e-9)
+                    applied["center_wavelength_nm"] = float(self.spec.get_wavelength()) * 1e9
+                    calibration_changed = True
+                if calibration_changed:
+                    self._update_calibration()
+
+                if "temperature_setpoint_c" in values:
+                    self.cam.set_temperature(values["temperature_setpoint_c"], enable_cooler=False)
+                    applied["temperature_setpoint_c"] = float(self.cam.get_temperature_setpoint())
+                if "fan_mode" in values:
+                    self.cam.set_fan_mode(values["fan_mode"])
+                    applied["fan_mode"] = str(self.cam.get_fan_mode())
+                if "cooler_enabled" in values:
+                    self.cam.set_cooler(values["cooler_enabled"])
+                    applied["cooler_enabled"] = bool(self.cam.is_cooler_on())
+            finally:
+                # Preserve truth even if a later hardware operation fails.
+                if applied:
+                    self._set_auto_settings(applied)
+                    self._merge_settings_cache(applied)
+
+    def _validate_settings_request(self, requested: dict) -> dict[str, Any]:
+        values: dict[str, Any] = {}
+
+        if "exposure_s" in requested:
+            value = self._finite_number(requested["exposure_s"], "exposure_s")
+            if not 0.001 <= value <= MAX_EXPOSURE_S:
+                raise ValueError(
+                    f"exposure_s must be between 0.001 and {MAX_EXPOSURE_S:g} seconds"
+                )
+            values["exposure_s"] = value
+
+        target_grating = int(requested.get("grating", self.spec.get_grating()))
+        grating_count = int(self.spec.get_gratings_number())
+        if not 1 <= target_grating <= grating_count:
+            raise ValueError(f"grating must be between 1 and {grating_count}")
+        if "grating" in requested:
+            raw = requested["grating"]
+            if isinstance(raw, bool) or float(raw) != target_grating:
+                raise ValueError("grating must be a whole-number index")
+            values["grating"] = target_grating
+
+        if "center_wavelength_nm" in requested:
+            wavelength_nm = self._finite_number(requested["center_wavelength_nm"], "center_wavelength_nm")
+            lower_m, upper_m = self.spec.get_wavelength_limits(target_grating)
+            lower_nm, upper_nm = float(lower_m) * 1e9, float(upper_m) * 1e9
+            if not lower_nm <= wavelength_nm <= upper_nm:
+                raise ValueError(
+                    f"center_wavelength_nm must be within {lower_nm:g} to {upper_nm:g} nm "
+                    f"for grating {target_grating}"
+                )
+            values["center_wavelength_nm"] = wavelength_nm
+
+        if "temperature_setpoint_c" in requested:
+            temperature = self._finite_number(requested["temperature_setpoint_c"], "temperature_setpoint_c")
+            lower_c, upper_c = (float(v) for v in self.cam.get_temperature_range())
+            if not lower_c <= temperature <= upper_c:
+                raise ValueError(
+                    f"temperature_setpoint_c must be within {lower_c:g} to {upper_c:g} degC"
+                )
+            values["temperature_setpoint_c"] = temperature
+
+        if "cooler_enabled" in requested:
+            if not isinstance(requested["cooler_enabled"], bool):
+                raise ValueError("cooler_enabled must be true or false")
+            values["cooler_enabled"] = requested["cooler_enabled"]
+
+        if "fan_mode" in requested:
+            fan_mode = str(requested["fan_mode"])
+            if fan_mode not in {"off", "low", "full"}:
+                raise ValueError("fan_mode must be one of: off, low, full")
+            values["fan_mode"] = fan_mode
+
+        return values
+
+    @staticmethod
+    def _finite_number(value: Any, name: str) -> float:
+        if isinstance(value, bool):
+            raise ValueError(f"{name} must be a number")
+        try:
+            result = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name} must be a number") from exc
+        if not np.isfinite(result):
+            raise ValueError(f"{name} must be finite")
+        return result
+
+    # ------------------------------------------------------------------
+    # Calibration and acquisition
+    # ------------------------------------------------------------------
+
+    def _update_calibration(self) -> None:
+        self._require_ready()
+        self._wavelength_nm = np.array([], dtype=float)
+        self.spec.setup_pixels_from_camera(self.cam)
+        wavelength_m = np.asarray(self.spec.get_calibration(), dtype=float).squeeze()
+        if wavelength_m.ndim != 1 or wavelength_m.size != EXPECTED_SPECTRUM_PIXELS:
+            raise RuntimeError(
+                "Kymera calibration length mismatch: expected "
+                f"{EXPECTED_SPECTRUM_PIXELS}, got {wavelength_m.size}."
+            )
+        if not np.all(np.isfinite(wavelength_m)):
+            raise RuntimeError("Kymera calibration contains non-finite values")
+        self._wavelength_nm = wavelength_m * 1e9
+        self._set_auto_settings(
+            {
+                "grating": int(self.spec.get_grating()),
+                "center_wavelength_nm": float(self.spec.get_wavelength()) * 1e9,
+            }
+        )
+
+    def perform_measurement_structured(self) -> MeasurementResult:
+        with self._hardware_lock:
+            self._require_ready()
+            if self._acquisition_fault is not None:
+                raise RuntimeError(
+                    "Acquisition is safety-latched after the previous failure: "
+                    f"{self._acquisition_fault}. Inspect the instrument and reconnect explicitly; "
+                    "automatic retries are disabled."
+                )
+            if self._wavelength_nm.size != EXPECTED_SPECTRUM_PIXELS:
+                self._update_calibration()
+
+            exposure_s = float(self.cam.get_exposure())
+            timeout_s = max(exposure_s + 5.0, 10.0)
+            try:
+                raw = self.cam.snap(timeout=timeout_s)
+            except Exception as exc:
+                self._acquisition_fault = f"{type(exc).__name__}: {exc}"
+                try:
+                    self.cam.clear_acquisition()
+                except Exception:
+                    LOG.debug("Could not clear acquisition after a failed snap", exc_info=True)
+                raise
+
+            intensity = np.asarray(raw, dtype=float).squeeze()
+            if intensity.ndim != 1 or intensity.size != EXPECTED_SPECTRUM_PIXELS:
+                self._acquisition_fault = f"unexpected spectrum shape {np.asarray(raw).shape}"
+                raise RuntimeError(
+                    "Newton spectrum shape mismatch: expected one "
+                    f"{EXPECTED_SPECTRUM_PIXELS}-point row, got {np.asarray(raw).shape}."
+                )
+            if intensity.size != self._wavelength_nm.size:
+                self._acquisition_fault = (
+                    f"{intensity.size} intensity values for {self._wavelength_nm.size} wavelengths"
+                )
+                raise RuntimeError(
+                    "Spectrum/calibration mismatch: "
+                    f"{intensity.size} intensity values and {self._wavelength_nm.size} wavelengths."
+                )
+            if not np.all(np.isfinite(intensity)):
+                self._acquisition_fault = "spectrum contained non-finite intensity values"
+                raise RuntimeError("Newton spectrum contains non-finite intensity values")
+
+            return MeasurementResult.of(
+                Stream(
+                    "spectrum",
+                    signals=[Signal("intensity", intensity, "counts")],
+                    coords=[Coordinate("wavelength", self._wavelength_nm.copy(), "nm")],
+                    display_mode="spectrum",
+                )
+            )
+
+    def get_temperature_status(self) -> dict[str, Any]:
+        """Return a small live CCD-temperature snapshot for Agent Driver Test.
+
+        This method never changes the cooler, setpoint, or fan.  It is serialized
+        with acquisition and settings traffic, so a panel requesting temperature
+        during a long scan receives a busy/error response rather than issuing a
+        concurrent Andor SDK call.
+        """
+
+        with self._hardware_lock:
+            if self.cam is None or not self._identity_validated or not self.status:
+                return {
+                    "connected": False,
+                    "temperature_c": None,
+                    "temperature_status": "disconnected",
+                    "cooler_enabled": False,
+                    "temperature_setpoint_c": None,
+                    "fan_mode": None,
+                    "read_at": datetime.now(timezone.utc).isoformat(),
+                    "error": self.last_connect_error,
+                }
+            return self._temperature_status_locked()
+
+    def _temperature_status_locked(self) -> dict[str, Any]:
+        """Read temperature fields while ``_hardware_lock`` is already held."""
+
+        return {
+            "connected": True,
+            "temperature_c": float(self.cam.get_temperature()),
+            "temperature_status": str(self.cam.get_temperature_status()),
+            "cooler_enabled": bool(self.cam.is_cooler_on()),
+            "temperature_setpoint_c": float(self.cam.get_temperature_setpoint()),
+            "fan_mode": str(self.cam.get_fan_mode()),
+            "read_at": datetime.now(timezone.utc).isoformat(),
+            "error": None,
+        }
+
+    # ------------------------------------------------------------------
+    # Explicit diagnostics (never called by the cached settings getter)
+    # ------------------------------------------------------------------
+
+    def get_device_status(self) -> dict[str, Any]:
+        """Return a live diagnostic snapshot for guided commissioning."""
+
+        with self._hardware_lock:
+            if self.cam is None or self.spec is None or not self._identity_validated:
+                return {
+                    "connected": False,
+                    "last_connect_error": self.last_connect_error,
+                    "camera": dict(self._camera_identity),
+                    "spectrograph_serial": self._spectrograph_serial,
+                    "acquisition_fault": self._acquisition_fault,
+                }
+            temperature = self._temperature_status_locked()
+            return {
+                "connected": bool(self.status),
+                "camera": dict(self._camera_identity),
+                "spectrograph_serial": self._spectrograph_serial,
+                "detector_size": self._detector_size,
+                "pixel_size_m": self._pixel_size_m,
+                "temperature_c": temperature["temperature_c"],
+                "temperature_status": temperature["temperature_status"],
+                "cooler_enabled": temperature["cooler_enabled"],
+                "temperature_setpoint_c": temperature["temperature_setpoint_c"],
+                "fan_mode": temperature["fan_mode"],
+                "temperature_read_at": temperature["read_at"],
+                "exposure_s": float(self.cam.get_exposure()),
+                "grating": int(self.spec.get_grating()),
+                "center_wavelength_nm": float(self.spec.get_wavelength()) * 1e9,
+                "calibration_points": int(self._wavelength_nm.size),
+                "calibration_min_nm": float(self._wavelength_nm.min()),
+                "calibration_max_nm": float(self._wavelength_nm.max()),
+                "acquisition_fault": self._acquisition_fault,
+                "last_connect_error": self.last_connect_error,
+            }
+
+    def _require_camera_identity(self) -> None:
+        if self.cam is None or not self._identity_validated:
+            raise RuntimeError("The approved Newton camera identity has not been validated")
+
+    def _require_ready(self) -> None:
+        self._require_camera_identity()
+        if self.spec is None:
+            raise RuntimeError("The Kymera spectrograph is not connected")
+
+
+__all__ = ["NewtonKymera328iDriver"]
